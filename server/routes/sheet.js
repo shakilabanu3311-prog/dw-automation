@@ -110,18 +110,28 @@ router.get('/google/config', A.requireAuth, (req, res) => {
   };
   res.json({
     ok: true,
-    sheet_id: get('GOOGLE_SHEET_ID') || '',
+    // Legacy field (= MAIN sheet id) for backward compat with old UI.
+    sheet_id: get('GOOGLE_SHEET_ID_MAIN') || get('GOOGLE_SHEET_ID') || '',
+    sheet_id_main: get('GOOGLE_SHEET_ID_MAIN') || get('GOOGLE_SHEET_ID') || '',
+    sheet_id_b1:   get('GOOGLE_SHEET_ID_B1')   || '',
+    sheet_id_b2:   get('GOOGLE_SHEET_ID_B2')   || '',
+    sheet_id_b3:   get('GOOGLE_SHEET_ID_B3')   || '',
     tab: get('GOOGLE_SHEET_TAB') || 'DEMO',
     sa_set: !!get('GOOGLE_SERVICE_ACCOUNT_JSON'),
     via_env: !!(process.env.GOOGLE_SHEET_ID && process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
   });
 });
 router.post('/google/config', A.requireAuth, A.requireAdmin, (req, res) => {
-  const { sheet_id, tab, sa_json } = req.body || {};
+  const { sheet_id, sheet_id_main, sheet_id_b1, sheet_id_b2, sheet_id_b3, tab, sa_json } = req.body || {};
   const upsert = db.prepare(`INSERT INTO settings(key, value) VALUES (?,?)
                               ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
-  if (sheet_id !== undefined) upsert.run('GOOGLE_SHEET_ID', String(sheet_id || ''));
-  if (tab !== undefined)      upsert.run('GOOGLE_SHEET_TAB', String(tab || 'DEMO'));
+  // Legacy single-sheet field still writes MAIN so old admins keep working.
+  if (sheet_id !== undefined)      upsert.run('GOOGLE_SHEET_ID_MAIN', String(sheet_id || ''));
+  if (sheet_id_main !== undefined) upsert.run('GOOGLE_SHEET_ID_MAIN', String(sheet_id_main || ''));
+  if (sheet_id_b1 !== undefined)   upsert.run('GOOGLE_SHEET_ID_B1',   String(sheet_id_b1   || ''));
+  if (sheet_id_b2 !== undefined)   upsert.run('GOOGLE_SHEET_ID_B2',   String(sheet_id_b2   || ''));
+  if (sheet_id_b3 !== undefined)   upsert.run('GOOGLE_SHEET_ID_B3',   String(sheet_id_b3   || ''));
+  if (tab !== undefined)           upsert.run('GOOGLE_SHEET_TAB',     String(tab || 'DEMO'));
   if (sa_json !== undefined && sa_json) {
     // Validate JSON if it looks like JSON
     if (sa_json.trim().startsWith('{')) {
@@ -130,7 +140,9 @@ router.post('/google/config', A.requireAuth, A.requireAdmin, (req, res) => {
     }
     upsert.run('GOOGLE_SERVICE_ACCOUNT_JSON', String(sa_json));
   }
-  audit(req.user.id, 'config', 'google_sheet', null, { sheet_id, tab, sa: sa_json ? '***' : null });
+  audit(req.user.id, 'config', 'google_sheet', null, {
+    sheet_id_main, sheet_id_b1, sheet_id_b2, sheet_id_b3, tab, sa: sa_json ? '***' : null,
+  });
   res.json({ ok: true });
 });
 

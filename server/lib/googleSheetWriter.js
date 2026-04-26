@@ -24,8 +24,16 @@ function loadGoogleConfig() {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(k);
     return row ? row.value : null;
   };
+  // Per-branch sheet IDs. Falls back to legacy GOOGLE_SHEET_ID for MAIN.
+  const branchSheets = {
+    MAIN: get('GOOGLE_SHEET_ID_MAIN') || get('GOOGLE_SHEET_ID') || null,
+    B1:   get('GOOGLE_SHEET_ID_B1')   || null,
+    B2:   get('GOOGLE_SHEET_ID_B2')   || null,
+    B3:   get('GOOGLE_SHEET_ID_B3')   || null,
+  };
   return {
-    sheetId: get('GOOGLE_SHEET_ID'),
+    sheetId: branchSheets.MAIN, // legacy single-sheet field (= MAIN)
+    branchSheets,
     tab: get('GOOGLE_SHEET_TAB') || 'DEMO',
     saJson: get('GOOGLE_SERVICE_ACCOUNT_JSON'), // path OR raw JSON string
   };
@@ -128,23 +136,56 @@ function buildBatch(data, tab) {
   return reqs;
 }
 
-async function pushToGoogleSheet(db, business_date) {
+// Push a single branch's data to its sheet. Returns null if no sheet
+// configured for that branch (skipped silently).
+async function pushBranchToGoogleSheet(db, business_date, branchCode) {
   const cfg = loadGoogleConfig();
-  const sheetId = cfg.sheetId;
-  const tab = cfg.tab;
-  if (!sheetId) throw new Error('GOOGLE_SHEET_ID not set (env or settings table)');
+  const sheetId = cfg.branchSheets[branchCode];
+  if (!sheetId) return null;
   const svc = await sheetsClient();
-  const data = buildDataForDate(db, business_date);
-  const reqs = buildBatch(data, tab);
-  if (!reqs.length) return { updated: 0 };
+  const data = buildDataForDate(db, business_date, branchCode);
+  const reqs = buildBatch(data, cfg.tab);
+  if (!reqs.length) return { branch: branchCode, sheetId, updated: 0 };
   const resp = await svc.spreadsheets.values.batchUpdate({
     spreadsheetId: sheetId,
     requestBody: { valueInputOption: 'RAW', data: reqs },
   });
   return {
+    branch: branchCode,
     updated: resp.data.totalUpdatedCells || 0,
     ranges: reqs.length,
-    sheetId, tab, url: `https://docs.google.com/spreadsheets/d/${sheetId}`,
+    sheetId, tab: cfg.tab,
+    url: `https://docs.google.com/spreadsheets/d/${sheetId}`,
+  };
+}
+
+// Push to ALL configured branch sheets (MAIN + B1 + B2 + B3). Each branch
+// is pushed only if its sheet ID is set, so partial config still works.
+async function pushToGoogleSheet(db, business_date) {
+  const cfg = loadGoogleConfig();
+  const codes = ['MAIN', 'B1', 'B2', 'B3'];
+  const results = [];
+  let anyConfigured = false;
+  for (const code of codes) {
+    if (!cfg.branchSheets[code]) continue;
+    anyConfigured = true;
+    try {
+      const r = await pushBranchToGoogleSheet(db, business_date, code);
+      if (r) results.push(r);
+    } catch (e) {
+      results.push({ branch: code, error: String(e.message || e) });
+    }
+  }
+  if (!anyConfigured) throw new Error('No GOOGLE_SHEET_ID configured for any branch (set GOOGLE_SHEET_ID_MAIN/_B1/_B2/_B3 or legacy GOOGLE_SHEET_ID)');
+  // Aggregate stats for backward-compat callers.
+  const totalUpdated = results.reduce((a, r) => a + (r.updated || 0), 0);
+  return {
+    updated: totalUpdated,
+    branches: results,
+    // legacy fields (point to MAIN)
+    sheetId: cfg.branchSheets.MAIN || results[0]?.sheetId,
+    tab: cfg.tab,
+    url: cfg.branchSheets.MAIN ? `https://docs.google.com/spreadsheets/d/${cfg.branchSheets.MAIN}` : (results[0] && results[0].url),
   };
 }
 
@@ -154,7 +195,9 @@ const _pending = new Map(); // date -> timer
 function scheduleLiveSync(business_date) {
   try {
     const cfg = loadGoogleConfig();
-    if (!cfg.sheetId || !cfg.saJson) return; // not configured — skip silently
+    if (!cfg.saJson) return; // no creds — skip
+    const anySheet = Object.values(cfg.branchSheets).some(Boolean);
+    if (!anySheet) return; // no sheet IDs configured for any branch
     if (_pending.has(business_date)) return;
     const t = setTimeout(async () => {
       _pending.delete(business_date);
@@ -170,4 +213,4 @@ function scheduleLiveSync(business_date) {
   } catch (_) {}
 }
 
-module.exports = { pushToGoogleSheet, buildBatch, a1, rangeA1, loadGoogleConfig, scheduleLiveSync };
+module.exports = { pushToGoogleSheet, pushBranchToGoogleSheet, buildBatch, a1, rangeA1, loadGoogleConfig, scheduleLiveSync };

@@ -259,8 +259,19 @@
     // ── New: render the actual xlsx template as styled HTML (ditto layout)
     try {
       const branch = ($('#liveBranch') && $('#liveBranch').value) || 'MAIN';
+      // Preserve scroll position + active cell across silent auto-refresh
+      // (every 10s) so the user doesn't get yanked back to A1 mid-edit.
+      const lg = $('#liveGrid');
+      const prevScrollLeft = lg.scrollLeft, prevScrollTop = lg.scrollTop;
+      const focusedTd = document.activeElement && document.activeElement.closest && document.activeElement.closest('#liveGrid td');
+      const focusedRC = focusedTd ? `${focusedTd.dataset.r},${focusedTd.dataset.c}` : null;
       const r = await api('/api/sheet/html?date=' + encodeURIComponent(d) + '&branch=' + encodeURIComponent(branch));
-      $('#liveGrid').innerHTML = '<div class="sheet-html-wrap">' + r.html + '</div>';
+      lg.innerHTML = '<div class="sheet-html-wrap">' + r.html + '</div>';
+      lg.scrollLeft = prevScrollLeft; lg.scrollTop = prevScrollTop;
+      if (focusedRC) {
+        const td = lg.querySelector(`td[data-r="${focusedRC.split(',')[0]}"][data-c="${focusedRC.split(',')[1]}"]`);
+        if (td) { td.focus(); }
+      }
       $('#liveStatus').textContent = 'Last updated ' + new Date().toLocaleTimeString() + ' · click any cell to edit';
       // Wire contenteditable blur → POST manual override
       $$('#liveGrid td[contenteditable]').forEach(td => {
@@ -392,11 +403,11 @@
   async function loadFreeplay() {
     const d = $('#fp-date').value || BD;
     try {
-      const r = await api(`/api/dw?business_date=${encodeURIComponent(d)}`);
+      const [r, br] = await Promise.all([
+        api(`/api/dw?business_date=${encodeURIComponent(d)}`),
+        api('/api/branches').catch(() => ({ branches: [] })),
+      ]);
       const all = r.rows || [];
-      // Match Freeplay rows broadly: (a) panel_slug contains 'freeplay',
-      // (b) source='extension' (any extension-fed row goes here unless we
-      // explicitly route it elsewhere), or (c) remark mentions freeplay.
       const isFp = x => {
         const s = (x.panel_slug || '').toLowerCase();
         if (s.includes('freeplay')) return true;
@@ -404,21 +415,66 @@
         if (((x.remark || '') + (x.name || '')).toLowerCase().includes('freeplay')) return true;
         return false;
       };
-      const deps = all.filter(x => isFp(x) && x.type === 'Deposit');
-      const wdls = all.filter(x => isFp(x) && x.type === 'Withdrawal');
+      const fpRows = all.filter(isFp);
       const sum = arr => arr.reduce((a, b) => a + (Number(b.amt) || 0), 0);
-      $('#fpDepTotal').textContent = `· ${deps.length} · ₹${sum(deps).toLocaleString('en-IN')}`;
-      $('#fpWdlTotal').textContent = `· ${wdls.length} · ₹${sum(wdls).toLocaleString('en-IN')}`;
-      const cols = ['ts','name','amt','utr','source','remark'];
-      const render = arr => arr.length
-        ? tableOf(arr, cols)
-        : '<div class="mute">No approved rows yet — load the freeplay panel in Chrome with the extension installed, then click Sync now in the popup.</div>';
-      $('#fpDepTable').innerHTML = render(deps);
-      $('#fpWdlTable').innerHTML = render(wdls);
-      // Role-based hide
-      const fpOnly = document.body.dataset.fpOnly;
-      if (fpOnly === 'dep') $('#fpWdlTable').parentElement.style.display = 'none';
-      if (fpOnly === 'wdl') $('#fpDepTable').parentElement.style.display = 'none';
+
+      // Group rows by panel_slug.
+      const byPanel = {};
+      for (const row of fpRows) {
+        const slug = (row.panel_slug || 'unmapped').toUpperCase();
+        (byPanel[slug] = byPanel[slug] || []).push(row);
+      }
+
+      // Render: one block per branch; inside each branch, one row per panel.
+      const fpOnly = document.body.dataset.fpOnly; // 'dep' | 'wdl' | undefined
+      const branches = (br.branches || []).filter(b => !b.is_aggregate);
+      let html = '';
+      for (const b of branches) {
+        const slugs = b.panel_slugs || [];
+        if (!slugs.length) continue;
+        let branchTotal = { dep: 0, wdl: 0 };
+        let blocks = '';
+        for (const slug of slugs) {
+          const rows = byPanel[slug] || [];
+          const deps = rows.filter(x => x.type === 'Deposit');
+          const wdls = rows.filter(x => x.type === 'Withdrawal');
+          branchTotal.dep += sum(deps); branchTotal.wdl += sum(wdls);
+          const cols = ['ts','name','amt','utr','source','remark'];
+          const tbl = (arr, kind) => {
+            if (fpOnly && fpOnly !== kind) return '';
+            const t = arr.length ? tableOf(arr, cols)
+              : '<div class="mute" style="font-size:12px;padding:6px">No approved rows.</div>';
+            const label = kind === 'dep' ? 'Deposit' : 'Withdrawal';
+            const total = sum(arr);
+            return `<div><div style="font-size:12px;color:#9ab" >${label} · ${arr.length} · ₹${total.toLocaleString('en-IN')}</div>${t}</div>`;
+          };
+          blocks += `
+            <div style="border:1px solid var(--border);border-radius:5px;padding:8px;margin-top:8px">
+              <div style="font-weight:600;margin-bottom:4px">${esc(slug)}</div>
+              <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px">
+                ${tbl(deps, 'dep')}${tbl(wdls, 'wdl')}
+              </div>
+            </div>`;
+        }
+        html += `
+          <div class="card" style="padding:10px;margin-top:10px">
+            <h3 style="margin:0">${esc(b.name)}
+              <span class="mute" style="font-weight:400;font-size:12px">
+                · Dep ₹${branchTotal.dep.toLocaleString('en-IN')} · Wdl ₹${branchTotal.wdl.toLocaleString('en-IN')}
+              </span>
+            </h3>
+            ${blocks}
+          </div>`;
+      }
+      // Top totals (preserved for back-compat with existing labels)
+      const allDeps = fpRows.filter(x => x.type === 'Deposit');
+      const allWdls = fpRows.filter(x => x.type === 'Withdrawal');
+      $('#fpDepTotal').textContent = `· ${allDeps.length} · ₹${sum(allDeps).toLocaleString('en-IN')}`;
+      $('#fpWdlTotal').textContent = `· ${allWdls.length} · ₹${sum(allWdls).toLocaleString('en-IN')}`;
+      // Replace the old 2-column grid contents with the new branch-wise grid.
+      const grid = $('#fpDepTable').parentElement.parentElement; // the .grid
+      grid.style.gridTemplateColumns = '1fr';
+      grid.innerHTML = html || '<div class="mute">No approved rows yet — load Freeplay24 in Chrome with the extension installed, then click Sync now.</div>';
       try {
         const s = await api('/api/ingest/panel/status');
         const fp = s.last_sync && s.last_sync.freeplay24;
@@ -602,10 +658,39 @@
         el.innerHTML = `<span class="mute">Google Sheet not configured. Set env vars <code>GOOGLE_SHEET_ID</code> + <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> and share the sheet with the service account's email.</span>`;
       }
     }).catch(() => {});
+    // Populate per-branch sheet ID inputs from the live config.
+    api('/api/sheet/google/config').then(c => {
+      if ($('#gsSheetMain')) $('#gsSheetMain').value = c.sheet_id_main || '';
+      if ($('#gsSheetB1'))   $('#gsSheetB1').value   = c.sheet_id_b1   || '';
+      if ($('#gsSheetB2'))   $('#gsSheetB2').value   = c.sheet_id_b2   || '';
+      if ($('#gsSheetB3'))   $('#gsSheetB3').value   = c.sheet_id_b3   || '';
+      if ($('#gsTab'))       $('#gsTab').value       = c.tab           || 'DEMO';
+    }).catch(() => {});
   }
   document.addEventListener('click', async (e) => {
     if (e.target.id === 'btnDownloadXlsx') {
       window.location.href = `/api/sheet/xlsx?date=${encodeURIComponent(BD)}`;
+    }
+    if (e.target.id === 'btnSaveGsConfig') {
+      try {
+        await api('/api/sheet/google/config', { method: 'POST', body: {
+          sheet_id_main: $('#gsSheetMain').value.trim(),
+          sheet_id_b1:   $('#gsSheetB1').value.trim(),
+          sheet_id_b2:   $('#gsSheetB2').value.trim(),
+          sheet_id_b3:   $('#gsSheetB3').value.trim(),
+          tab:           $('#gsTab').value.trim() || 'DEMO',
+        }});
+        $('#gsSaveStatus').textContent = 'Saved · live-sync will use these IDs from now on.';
+        $('#gsSaveStatus').className = 'pill ok';
+        setTimeout(() => { $('#gsSaveStatus').textContent = ''; $('#gsSaveStatus').className = 'mute'; }, 3000);
+      } catch (err) { toast(err.message, true); }
+    }
+    if (e.target.id === 'btnPushGoogleAll') {
+      try {
+        const r = await api('/api/sheet/google', { method: 'POST', body: { date: BD } });
+        const lines = (r.branches || []).map(b => b.error ? `${b.branch}: ❌ ${b.error}` : `${b.branch}: ✓ ${b.updated} cells`).join(' · ');
+        toast(`Pushed: ${lines}`);
+      } catch (err) { toast(err.message, true); }
     }
     if (e.target.id === 'btnPreviewSheet') {
       try {

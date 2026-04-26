@@ -240,6 +240,32 @@
         <div id="googleStatus" class="mute" style="margin-top:6px;font-size:12px"></div>
         <div id="sheetStatus" class="mute" style="margin-top:8px;font-size:12px"></div>
       </div>
+      <div class="card" id="gsConfigCard">
+        <h2>Google Sheet IDs — one per branch</h2>
+        <p class="mute" style="font-size:12px;margin:4px 0 8px">
+          Each branch pushes to its own Google Sheet. Open the sheet in Chrome, copy the ID
+          from the URL <code>/d/&lt;ID&gt;/edit</code>, paste it here and share each sheet
+          (Editor) with the service-account email. Live-sync runs every 3s after any entry —
+          all configured branches get updated, including MAIN (aggregate of every branch).
+        </p>
+        <div class="grid" style="grid-template-columns:1fr 2fr;gap:8px;font-size:13px">
+          <label>MAIN (all-branch master)</label>
+          <input id="gsSheetMain" placeholder="GOOGLE_SHEET_ID for MAIN sheet"/>
+          <label>Branch 1 — 1XBET</label>
+          <input id="gsSheetB1" placeholder="GOOGLE_SHEET_ID for Branch 1"/>
+          <label>Branch 2 — Laser / Radhe</label>
+          <input id="gsSheetB2" placeholder="GOOGLE_SHEET_ID for Branch 2"/>
+          <label>Branch 3 — Tiger / 1X Club</label>
+          <input id="gsSheetB3" placeholder="GOOGLE_SHEET_ID for Branch 3"/>
+          <label>Tab name (same on every sheet)</label>
+          <input id="gsTab" placeholder="DEMO" value="DEMO"/>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnSaveGsConfig">Save sheet IDs</button>
+          <button class="ghost" id="btnPushGoogleAll">Push current date to all branches now</button>
+          <span id="gsSaveStatus" class="mute" style="font-size:12px"></span>
+        </div>
+      </div>
       <div class="card">
         <h2>Preview — rows that will be written</h2>
         <div id="sheetPreview" class="mute">Click <b>Preview</b> above.</div>
