@@ -258,7 +258,8 @@
     if (!silent) $('#liveStatus').textContent = 'Loading…';
     // ── New: render the actual xlsx template as styled HTML (ditto layout)
     try {
-      const r = await api('/api/sheet/html?date=' + encodeURIComponent(d));
+      const branch = ($('#liveBranch') && $('#liveBranch').value) || 'MAIN';
+      const r = await api('/api/sheet/html?date=' + encodeURIComponent(d) + '&branch=' + encodeURIComponent(branch));
       $('#liveGrid').innerHTML = '<div class="sheet-html-wrap">' + r.html + '</div>';
       $('#liveStatus').textContent = 'Last updated ' + new Date().toLocaleTimeString() + ' · click any cell to edit';
       // Wire contenteditable blur → POST manual override
@@ -287,7 +288,8 @@
     }
     // Fallback: legacy 2D grid renderer
     try {
-      const r = await api('/api/sheet/grid?date=' + encodeURIComponent(d));
+      const branch2 = ($('#liveBranch') && $('#liveBranch').value) || 'MAIN';
+      const r = await api('/api/sheet/grid?date=' + encodeURIComponent(d) + '&branch=' + encodeURIComponent(branch2));
       const g = r.grid || [];
       const colors = r.colors || [];
       const fontColors = r.fontColors || [];
@@ -456,6 +458,7 @@
     if (e.target.id === 'liveRefresh') {
       if ($('#liveView').value === 'google') applyLiveView(); else renderLiveGrid();
     }
+    if (e.target.id === 'liveBranch') { renderLiveGrid(); }
     if (e.target.id === 'liveDatePrev') {
       $('#live-date').value = shiftDate($('#live-date').value, -1);
       renderLiveGrid();
@@ -507,6 +510,9 @@
       renderLiveGrid();
     }
     if (e.target.id === 'live-date') {
+      renderLiveGrid();
+    }
+    if (e.target.id === 'liveBranch') {
       renderLiveGrid();
     }
   });

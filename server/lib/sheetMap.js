@@ -62,7 +62,57 @@ const CATEGORIES = {
   parking_out:    { block: 'PARKING',  side: 'debit',  label: 'PARKING OUT' },
 };
 
+// ── Multi-branch sheet configuration ──────────────────────────────────
+// Each branch is a separate "sheet" with its own panel column layout.
+// MAIN is the aggregator: its panels are the union of all branches'.
+// Per-branch panels start at the same PANEL_FIRST_ROW; their `col` offsets
+// are reused from the same 4-column block (deposit/freechips/withdrawal/blank).
+// The xlsx writer / google-sheet writer / live-grid pick up `panels` from the
+// branch named by ?branch=… in API calls, falling back to MAIN.
+function panelsAt(slugs, startCol = 14) {
+  return slugs.map((slug, i) => ({ slug, col: startCol + i * 4 }));
+}
+const BRANCHES = [
+  {
+    code: 'B1', name: 'Branch 1 — 1XBET',
+    panels: panelsAt(['1XBET0001', '1XBET0002', '1XBET0003', '1XBET0004']),
+  },
+  {
+    code: 'B2', name: 'Branch 2 — Laser',
+    panels: panelsAt(['LASER0001', 'LASER0002', 'LASER0003', 'RADHE']),
+  },
+  {
+    code: 'B3', name: 'Branch 3 — Tiger / 1X Club',
+    panels: panelsAt(['TIGEREXCH0001', '1XCLUB0001']),
+  },
+  {
+    code: 'MAIN', name: 'Main (aggregate)',
+    is_aggregate: true,
+    // MAIN's panels = concat of all branches; recomputed at runtime so adding
+    // a branch automatically extends MAIN.
+    panels: null,
+  },
+];
+function getBranch(code) {
+  const c = String(code || 'MAIN').toUpperCase();
+  const b = BRANCHES.find(x => x.code === c);
+  if (!b) return getBranch('MAIN');
+  if (b.is_aggregate && !b.panels) {
+    // Build a fresh panels array spanning every non-aggregate branch.
+    const all = [];
+    for (const x of BRANCHES) if (!x.is_aggregate) all.push(...x.panels.map(p => p.slug));
+    return { ...b, panels: panelsAt(all) };
+  }
+  return b;
+}
+function allPanelSlugs() {
+  const out = [];
+  for (const b of BRANCHES) if (!b.is_aggregate) out.push(...b.panels.map(p => p.slug));
+  return out;
+}
+
 module.exports = {
   PANELS, PANEL_COL, PANEL_FIRST_ROW, PANEL_LAST_ROW,
   BANK, DW_SUMMARY, CHIPS_SUMMARY, BANK_EXP, PARKING, CATEGORIES,
+  BRANCHES, getBranch, allPanelSlugs, panelsAt,
 };

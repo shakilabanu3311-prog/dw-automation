@@ -10,6 +10,7 @@ const entryRoutes = require('./routes/entries');
 const ingestRoutes = require('./routes/ingest');
 const sheetRoutes = require('./routes/sheet');
 const reconcileRoutes = require('./routes/reconcile');
+const branchRoutes = require('./routes/branches');
 const { currentBusinessDate } = require('./lib/businessDate');
 
 const PORT = process.env.PORT || 3000;
@@ -31,12 +32,44 @@ function bootstrap() {
     const has = db.prepare("SELECT 1 FROM settings WHERE key='panel_map'").get();
     if (!has) {
       const seed = {
+        // Testing master → real B1 panel for the dry-run.
         'freeplay24:MAHA0001': '1XBET0001',  // ⚠ TESTING ONLY
+        // Real masters that the extension will see once live.
+        // Branch 1 — 1XBET 0001..0004
+        'freeplay24:1XBET0001': '1XBET0001',
+        'freeplay24:1XBET0002': '1XBET0002',
+        'freeplay24:1XBET0003': '1XBET0003',
+        'freeplay24:1XBET0004': '1XBET0004',
+        // Branch 2 — Laser + Radhe
+        'freeplay24:LASER0001': 'LASER0001',
+        'freeplay24:LASER0002': 'LASER0002',
+        'freeplay24:LASER0003': 'LASER0003',
+        'freeplay24:RADHE':     'RADHE',
+        // Branch 3 — Tiger Exch + 1X Club
+        'freeplay24:TIGEREXCH0001': 'TIGEREXCH0001',
+        'freeplay24:1XCLUB0001':    '1XCLUB0001',
       };
       db.prepare("INSERT INTO settings(key,value) VALUES('panel_map', ?)").run(JSON.stringify(seed));
-      console.log('[bootstrap] seeded panel_map (TESTING ONLY):', seed);
+      console.log('[bootstrap] seeded panel_map for all branches');
     }
   } catch (e) { console.error('[bootstrap] panel_map seed failed', e.message); }
+
+  // Seed branches table — idempotent. Updates panel_slugs if BRANCHES list changed.
+  try {
+    const M = require('./lib/sheetMap');
+    const upsert = db.prepare(`
+      INSERT INTO branches(code, name, panel_slugs, is_aggregate, sort_order)
+      VALUES (?,?,?,?,?)
+      ON CONFLICT(code) DO UPDATE SET
+        name=excluded.name, panel_slugs=excluded.panel_slugs,
+        is_aggregate=excluded.is_aggregate, sort_order=excluded.sort_order
+    `);
+    M.BRANCHES.forEach((b, i) => {
+      const slugs = b.is_aggregate ? M.allPanelSlugs() : b.panels.map(p => p.slug);
+      upsert.run(b.code, b.name, JSON.stringify(slugs), b.is_aggregate ? 1 : 0, i);
+    });
+    console.log('[bootstrap] seeded', M.BRANCHES.length, 'branches');
+  } catch (e) { console.error('[bootstrap] branches seed failed', e.message); }
 
   const count = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
   if (count === 0) {
@@ -165,6 +198,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/ingest', ingestRoutes);
 app.use('/api/sheet', sheetRoutes);
 app.use('/api/reconcile', reconcileRoutes);
+app.use('/api/branches', branchRoutes);
 app.use('/api', entryRoutes);
 
 app.use(express.static(PUBLIC_DIR));

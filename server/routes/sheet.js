@@ -40,12 +40,13 @@ router.post('/template', A.requireAuth, A.requireAdmin, upload.single('file'), (
 
 router.get('/xlsx', A.requireAuth, (req, res) => {
   const date = req.query.date || currentBusinessDate();
+  const branch = req.query.branch || null;
   const tpl = getTemplatePath();
   if (!tpl || !fs.existsSync(tpl)) {
     return res.status(400).json({ ok: false, error: 'no template uploaded — POST /api/sheet/template first' });
   }
   try {
-    const data = buildDataForDate(db, date);
+    const data = buildDataForDate(db, date, branch);
     const out = path.join(OUT_DIR, `hisab_${date}.xlsx`);
     writeWorkbook(tpl, out, data);
     res.download(out, `hisab_${date}.xlsx`);
@@ -210,9 +211,10 @@ router.post('/banks/:id/open', A.requireAuth, A.requireAdmin, (req, res) => {
 // Live 2D grid for the Google-Sheets-style viewer in the web app.
 router.get('/grid', A.requireAuth, (req, res) => {
   const date = req.query.date || currentBusinessDate();
+  const branch = req.query.branch || null;
   try {
-    const data = buildDataForDate(db, date);
-    const g = buildGrid(data);
+    const data = buildDataForDate(db, date, branch);
+    const g = buildGrid(data, branch);
     const tpl = getTemplatePath();
     const styles = tpl ? loadTemplateStyles(tpl) : { colors: [], fontColors: [], fontBold: [], tplValues: [], merges: [], colWidths: [] };
     // Build the final grid: start from the template's own labels & static
@@ -292,6 +294,7 @@ function cacheKey(tpl, date, editable, ovStamp) {
 router.get('/html', A.requireAuth, (req, res) => {
   const date = req.query.date || currentBusinessDate();
   const editable = req.query.editable !== '0';
+  const branch = req.query.branch || null;
   const tpl = getTemplatePath();
   if (!tpl || !fs.existsSync(tpl)) return res.status(400).json({ ok: false, error: 'no template uploaded' });
   try {
@@ -300,12 +303,12 @@ router.get('/html', A.requireAuth, (req, res) => {
       const r = db.prepare("SELECT COUNT(*) c, COALESCE(MAX(updated_at),'') u FROM sheet_overrides WHERE business_date = ?").get(date);
       return `${r.c}@${r.u}`;
     })();
-    const ck = cacheKey(tpl, date, editable, ovStamp);
+    const ck = cacheKey(tpl, date, editable, ovStamp) + '|' + (branch || 'MAIN');
     const hit = _htmlCache.get(ck);
     if (hit) return res.json({ ok: true, business_date: date, html: hit, cached: true });
 
-    const data = buildDataForDate(db, date);
-    const g = buildGrid(data);
+    const data = buildDataForDate(db, date, branch);
+    const g = buildGrid(data, branch);
     // Pack live values into a {"r,c": value} map for the renderer.
     // Only inject NUMERIC values (computed totals) — string header labels
     // are already in the template; we don't want to overwrite the template's

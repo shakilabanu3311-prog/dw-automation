@@ -106,8 +106,22 @@ function writeLedger(ws, block, rows, hasSr) {
 }
 
 // Build the `data` object from DB rows for a given business_date.
-function buildDataForDate(db, business_date) {
-  const banks = db.prepare('SELECT id, name, holder, open_balance AS open FROM banks ORDER BY id LIMIT 50').all();
+//
+// `branchCode` (optional): when set to a non-aggregate branch (B1/B2/B3),
+// banks are filtered to those assigned to that branch and panels are
+// limited to that branch's slug list. MAIN/undefined = full aggregate
+// (current behaviour).
+function buildDataForDate(db, business_date, branchCode) {
+  const branch = branchCode ? M.getBranch(branchCode) : null;
+  const restrictPanels = branch && !branch.is_aggregate;
+  const allowedSlugs = restrictPanels ? new Set(branch.panels.map(p => p.slug)) : null;
+
+  const bankSql = restrictPanels
+    ? 'SELECT id, name, holder, open_balance AS open FROM banks WHERE branch_code = ? ORDER BY id LIMIT 50'
+    : 'SELECT id, name, holder, open_balance AS open FROM banks ORDER BY id LIMIT 50';
+  const banks = restrictPanels
+    ? db.prepare(bankSql).all(branch.code)
+    : db.prepare(bankSql).all();
   // Aggregate credit/debit per bank_id for the date. Bank charges are kept out
   // of the per-bank credit/debit totals here — they flow into the Bank & Exp ledger.
   const txns = db.prepare(`
@@ -134,10 +148,12 @@ function buildDataForDate(db, business_date) {
     WHERE business_date = ? AND panel_slug IS NOT NULL ORDER BY id
   `).all(business_date);
   const panels = {};
-  for (const p of M.PANELS) panels[p.slug] = { entries: [], totalDeposit: 0, totalWithdrawal: 0 };
+  const panelDefs = (branch ? (branch.is_aggregate ? M.getBranch('MAIN').panels : branch.panels) : M.PANELS);
+  for (const p of panelDefs) panels[p.slug] = { entries: [], totalDeposit: 0, totalWithdrawal: 0 };
   // group by name within panel
   const byPanelName = {};
   for (const r of dwRows) {
+    if (allowedSlugs && !allowedSlugs.has(r.panel_slug)) continue;
     const key = r.panel_slug + '|' + (r.name || '');
     byPanelName[key] = byPanelName[key] || { panel: r.panel_slug, name: r.name, deposit: 0, withdrawal: 0, freeChips: 0 };
     if (r.type === 'Deposit') byPanelName[key].deposit += r.amt;
@@ -245,9 +261,11 @@ function loadTemplateStyles(templatePath) {
     return { colors: [], fontColors: [], fontBold: [], tplValues: [], merges: [], colWidths: [], rows: 0, cols: 0 };
   }
 }
-function buildGrid(data) {
+function buildGrid(data, branchCode) {
+  const branch = branchCode ? M.getBranch(branchCode) : null;
+  const PANELS = branch ? (branch.is_aggregate ? M.getBranch('MAIN').panels : branch.panels) : M.PANELS;
   const ROWS = Math.max(M.BANK.lastRow, M.PANEL_FIRST_ROW + 60, M.BANK_EXP.lastRow) + 2;
-  const COLS = Math.max(...M.PANELS.map(p => p.col + 3), 14) + 1;
+  const COLS = Math.max(...PANELS.map(p => p.col + 3), 14) + 1;
   const grid = Array.from({ length: ROWS }, () => Array(COLS).fill(''));
   const set = (r, c, v) => { if (v === undefined || v === null || v === '') return; grid[r][c] = v; };
 
@@ -260,7 +278,7 @@ function buildGrid(data) {
   set(0, M.BANK.cols.debit, 'Debit');
   set(0, M.BANK.cols.closing, 'Closing');
   // Panel header row
-  M.PANELS.forEach(p => {
+  PANELS.forEach(p => {
     set(0, p.col + M.PANEL_COL.deposit, p.slug + ' DEP');
     set(0, p.col + M.PANEL_COL.freeChips, p.slug + ' FC');
     set(0, p.col + M.PANEL_COL.withdrawal, p.slug + ' WDL');
@@ -281,7 +299,7 @@ function buildGrid(data) {
 
   // Panel entries + summaries
   if (data.panels) {
-    M.PANELS.forEach((p, pi) => {
+    PANELS.forEach((p, pi) => {
       const pd = data.panels[p.slug];
       if (!pd) return;
       (pd.entries || []).forEach((e, i) => {

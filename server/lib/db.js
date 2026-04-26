@@ -181,6 +181,26 @@ ensureColumn('expenses', 'employee', 'TEXT'); // for ATM withdrawals: who withdr
 ensureColumn('bank_txns', 'balance', 'REAL');   // avl bal from SMS — used for gap detection
 ensureColumn('bank_txns', 'mode', 'TEXT');      // UPI|IMPS|NEFT|RTGS|ATM|CARD|null
 
+// ── Multi-branch support ───────────────────────────────────────────
+// Each "branch" owns a set of panel slugs and a set of banks. The MAIN
+// (aggregate) branch rolls everything up. branch_code lives as a string
+// (B1/B2/B3/MAIN) so it survives reseeding without FK churn.
+raw.exec(`
+CREATE TABLE IF NOT EXISTS branches (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  panel_slugs TEXT NOT NULL DEFAULT '[]',
+  is_aggregate INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+ensureColumn('banks', 'branch_code', 'TEXT');
+ensureColumn('bank_txns', 'branch_code', 'TEXT');
+ensureColumn('dw', 'branch_code', 'TEXT');
+ensureColumn('gpay', 'branch_code', 'TEXT');
+ensureColumn('expenses', 'branch_code', 'TEXT');
+
 // ── Adapter to give better-sqlite3–like API on top of node:sqlite ──
 function coerce(v) {
   if (v === undefined) return null;
