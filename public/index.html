@@ -186,13 +186,30 @@
 
     <div id="tab-uploads" class="tabpanel">
       <div class="card">
-        <h2>Upload bank statement (DCB PDF)</h2>
+        <h2>Upload bank statement (PDF)</h2>
         <div class="row">
           <input type="file" id="bsFile" accept="application/pdf"/>
           <button class="primary" id="bsPreviewBtn">Preview (auto-detect bank)</button>
           <select id="bs-bank" title="Override if auto-detect picks the wrong bank"><option value="">(auto-detect)</option></select>
         </div>
         <div id="bsPreview"></div>
+      </div>
+      <div class="card">
+        <h2>Online portal — paste statement text</h2>
+        <p class="mute" style="font-size:12px;margin:4px 0 8px">
+          For banks/portals that don't give a PDF: open your portal's transactions
+          page, select the rows (Ctrl+A → Ctrl+C) and paste below. The same parser
+          that handles PDFs runs on the pasted text — auto-detects bank, dedupes by
+          UTR, dates each row, routes bank charges to the Bank &amp; Exp ledger.
+        </p>
+        <div class="row" style="align-items:flex-start">
+          <textarea id="bsPasteText" rows="6" placeholder="Paste statement rows here…" style="flex:1;min-width:0;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="bsPastePreviewBtn">Preview pasted text</button>
+          <select id="bs-bank-paste" title="Override if auto-detect picks the wrong bank"><option value="">(auto-detect)</option></select>
+        </div>
+        <div id="bsPastePreview"></div>
       </div>
       <div class="card">
         <h2>Upload GPay Business statement (CSV or PDF)</h2>
@@ -239,6 +256,17 @@
         </div>
         <div id="googleStatus" class="mute" style="margin-top:6px;font-size:12px"></div>
         <div id="sheetStatus" class="mute" style="margin-top:8px;font-size:12px"></div>
+      </div>
+      <div class="card" id="tplCard">
+        <h2>Per-branch sheet templates</h2>
+        <p class="mute" style="font-size:12px;margin:4px 0 8px">
+          Upload a separate <code>.xlsx</code> for each branch so they can have
+          different layouts. Leave any slot blank to use the legacy
+          <code>master.xlsx</code> as a fallback.
+        </p>
+        <div id="tplGrid" class="grid" style="grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font-size:13px">
+          <!-- filled in by initSheetTab() -->
+        </div>
       </div>
       <div class="card" id="gsConfigCard">
         <h2>Google Sheet IDs — one per branch</h2>

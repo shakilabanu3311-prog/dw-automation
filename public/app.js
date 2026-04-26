@@ -659,6 +659,43 @@
       }
     }).catch(() => {});
     // Populate per-branch sheet ID inputs from the live config.
+    // Per-branch templates: render upload rows.
+    (async () => {
+      try {
+        const r = await api('/api/sheet/template/list');
+        const grid = $('#tplGrid');
+        if (!grid) return;
+        const rows = [
+          { code: 'MAIN', label: 'MAIN (aggregate)' },
+          { code: 'B1',   label: 'Branch 1 — 1XBET' },
+          { code: 'B2',   label: 'Branch 2 — Laser / Radhe' },
+          { code: 'B3',   label: 'Branch 3 — Tiger / 1X Club' },
+        ];
+        grid.innerHTML = rows.map(({ code, label }) => {
+          const has = r.branches && r.branches[code] && r.branches[code].has;
+          return `
+            <div>${esc(label)}</div>
+            <div><input type="file" accept=".xlsx" data-tpl-branch="${code}"/></div>
+            <div>${has ? '<span class="pill ok">uploaded</span>' : '<span class="mute" style="font-size:11px">(falls back to master.xlsx)</span>'}</div>
+          `;
+        }).join('');
+        grid.querySelectorAll('input[type=file][data-tpl-branch]').forEach(inp => {
+          inp.addEventListener('change', async () => {
+            const f = inp.files[0]; if (!f) return;
+            const branch = inp.dataset.tplBranch;
+            try {
+              const fd = new FormData(); fd.append('file', f);
+              const res = await fetch('/api/sheet/template?branch=' + encodeURIComponent(branch),
+                { method: 'POST', credentials: 'include', body: fd });
+              const j = await res.json();
+              if (!j.ok) throw new Error(j.error || 'upload failed');
+              toast(`Template uploaded for ${branch}`);
+              initSheetTab(); // re-render statuses
+            } catch (e) { toast(e.message, true); }
+          });
+        });
+      } catch {}
+    })();
     api('/api/sheet/google/config').then(c => {
       if ($('#gsSheetMain')) $('#gsSheetMain').value = c.sheet_id_main || '';
       if ($('#gsSheetB1'))   $('#gsSheetB1').value   = c.sheet_id_b1   || '';
@@ -768,6 +805,9 @@
       } catch {}
       bsBank.innerHTML = html;
     }
+    // Mirror the same options into the paste-text bank dropdown.
+    const bsBankPaste = $('#bs-bank-paste');
+    if (bsBankPaste && $('#bs-bank')) bsBankPaste.innerHTML = $('#bs-bank').innerHTML;
     $('#dw-panel').innerHTML = popts;
     $('#gp-panel').innerHTML = popts;
   }
@@ -910,6 +950,35 @@
     } catch (e) {
       console.error('[preview] failed', e);
       $('#bsPreview').innerHTML = `<div class="pill err" style="display:block;padding:10px;margin-top:10px">Preview failed: ${esc(e.message)}</div>`;
+      toast(e.message, true);
+    }
+  });
+
+  // Online portal paste-text preview
+  $('#bsPastePreviewBtn') && $('#bsPastePreviewBtn').addEventListener('click', async () => {
+    const text = $('#bsPasteText').value.trim();
+    if (!text) return toast('paste some statement text first', true);
+    $('#bsPastePreview').innerHTML = '<div class="mute" style="margin:10px 0">Parsing pasted text…</div>';
+    try {
+      const r = await api('/api/ingest/preview/bank-text', { method: 'POST', body: { text } });
+      const det = r.detected || {};
+      const sel = $('#bs-bank-paste');
+      if (sel && det.bank_id) sel.value = String(det.bank_id);
+      const tag = det.auto_registered ? ' · NEW bank auto-added' : '';
+      const label = det.bank_name
+        ? `Detected: ${det.bank_name}${det.ac_last4 ? ' · a/c …' + det.ac_last4 : ''} (${det.confidence}${tag})`
+        : (det.code ? `Detected code "${det.code}" but no matching bank row — pick one manually.`
+                    : 'Could not auto-detect bank from pasted text. Pick manually.');
+      if (det.auto_registered) { try { await loadDropdowns(); } catch {} }
+      const banner = `<div class="mute" style="margin:6px 0;font-size:12px;${det.bank_id?'color:#7cffa2':'color:#ffc166'}">${label}</div>`;
+      $('#bsPastePreview').innerHTML = banner;
+      if (!r.rows || !r.rows.length) {
+        $('#bsPastePreview').innerHTML = banner + '<div class="mute" style="margin-top:10px">No rows parsed — try copying more of the page (Ctrl+A → Ctrl+C).</div>';
+        return toast('No rows parsed from pasted text', true);
+      }
+      renderPreview('#bsPastePreview', r.rows, 'bank-statement', ['date','narration','amt','type','category','name','utr','entryKind','business_date','duplicate'], { _bankFromDropdown: '#bs-bank-paste' }, banner);
+    } catch (e) {
+      $('#bsPastePreview').innerHTML = `<div class="pill err" style="display:block;padding:10px;margin-top:10px">Preview failed: ${esc(e.message)}</div>`;
       toast(e.message, true);
     }
   });

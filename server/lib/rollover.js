@@ -15,7 +15,12 @@ const { businessDate, msUntilNextRollover, currentBusinessDate } = require('./bu
 const EXPORTS_DIR = path.join(__dirname, '..', '..', 'data', 'exports');
 fs.mkdirSync(EXPORTS_DIR, { recursive: true });
 
-function getTemplatePath() {
+function getTemplatePath(branchCode) {
+  const code = String(branchCode || '').toUpperCase();
+  if (code) {
+    const r = db.prepare("SELECT value FROM settings WHERE key = ?").get('sheet_template_path_' + code);
+    if (r && r.value) return r.value;
+  }
   const row = db.prepare("SELECT value FROM settings WHERE key = 'sheet_template_path'").get();
   return row ? row.value : null;
 }
@@ -26,13 +31,18 @@ async function runRollover(reason = 'scheduled') {
   const ts = new Date().toISOString();
   const info = { reason, closedDate, newDate, ts };
 
+  // Archive a snapshot per branch (uses each branch's own template if uploaded,
+  // else falls back to the legacy single template).
   try {
     const { writeWorkbook, buildDataForDate } = require('./xlsxWriter');
-    const tpl = getTemplatePath();
-    if (tpl && fs.existsSync(tpl)) {
-      const out = path.join(EXPORTS_DIR, `hisab_${closedDate}.xlsx`);
-      writeWorkbook(tpl, out, buildDataForDate(db, closedDate));
-      info.archived = out;
+    const codes = ['MAIN', 'B1', 'B2', 'B3'];
+    info.archived = {};
+    for (const code of codes) {
+      const tpl = getTemplatePath(code);
+      if (!tpl || !fs.existsSync(tpl)) continue;
+      const out = path.join(EXPORTS_DIR, `hisab_${closedDate}_${code}.xlsx`);
+      writeWorkbook(tpl, out, buildDataForDate(db, closedDate, code));
+      info.archived[code] = out;
     }
   } catch (e) { info.archive_error = String(e.message || e); }
 

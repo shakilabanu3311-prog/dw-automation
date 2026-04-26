@@ -35,6 +35,28 @@ router.post('/preview/bank-statement', A.requireAuth, upload.single('file'), asy
   }
 });
 
+// Online portal / paste-text uploader.
+// Body: { text: "<copy-pasted statement text or CSV>" }
+// Reuses the same generic line parser used for PDFs, so portals that
+// expose statements as plain text/CSV (or pages you copy with Ctrl+A)
+// work without needing a PDF download. Returns the same shape as
+// /preview/bank-statement so the UI can drop it into the same preview
+// table — same dedupe, same per-row business_date, same bank detect.
+router.post('/preview/bank-text', A.requireAuth, express.json({ limit: '5mb' }), async (req, res) => {
+  const text = String(req.body?.text || '');
+  if (!text.trim()) return res.status(400).json({ ok: false, error: 'text required' });
+  try {
+    const { parseRowsFromText } = require('../parsers/generic_pdf');
+    const rows = parseRowsFromText(text) || [];
+    const existing = new Set(db.prepare('SELECT ext_ref FROM bank_txns WHERE ext_ref IS NOT NULL').all().map(r => r.ext_ref));
+    const out = rows.map(r => ({ ...r, duplicate: existing.has(r.ext_ref) }));
+    const detected = detectFromText(text, { autoRegister: true });
+    res.json({ ok: true, pages: 0, rows: out, detected, source: 'paste-text' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 router.post('/commit/bank-statement', A.requireAuth, async (req, res) => {
   const { rows, bank_id } = req.body || {};
   if (!Array.isArray(rows)) return res.status(400).json({ ok: false, error: 'rows required' });

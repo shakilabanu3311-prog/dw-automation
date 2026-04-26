@@ -21,27 +21,54 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-function getTemplatePath() {
+// Per-branch templates: settings keys are sheet_template_path_<CODE>.
+// Falls back to the legacy single 'sheet_template_path' if a branch
+// hasn't uploaded its own template — so existing single-sheet setups
+// keep working unchanged.
+function getTemplatePath(branchCode) {
+  const code = String(branchCode || '').toUpperCase();
+  if (code) {
+    const r = db.prepare("SELECT value FROM settings WHERE key = ?").get('sheet_template_path_' + code);
+    if (r && r.value) return r.value;
+  }
   const row = db.prepare("SELECT value FROM settings WHERE key = 'sheet_template_path'").get();
   return row ? row.value : null;
 }
 
 router.post('/template', A.requireAuth, A.requireAdmin, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'no file' });
-  const dest = path.join(TEMPLATE_DIR, 'master.xlsx');
+  // ?branch=B1 → store as sheet_template_path_B1; omit → legacy single template.
+  const branch = String(req.query.branch || req.body?.branch || '').toUpperCase();
+  const filename = branch ? `branch_${branch}.xlsx` : 'master.xlsx';
+  const dest = path.join(TEMPLATE_DIR, filename);
   fs.writeFileSync(dest, req.file.buffer);
+  const key = branch ? ('sheet_template_path_' + branch) : 'sheet_template_path';
   db.prepare(
-    `INSERT INTO settings(key, value) VALUES ('sheet_template_path', ?)
+    `INSERT INTO settings(key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(dest);
-  audit(req.user.id, 'upload', 'sheet_template', null, { bytes: req.file.buffer.length });
-  res.json({ ok: true, path: dest });
+  ).run(key, dest);
+  audit(req.user.id, 'upload', 'sheet_template', branch || null, { bytes: req.file.buffer.length });
+  res.json({ ok: true, path: dest, branch: branch || null });
+});
+
+// List which branches have a custom template uploaded.
+router.get('/template/list', A.requireAuth, (req, res) => {
+  const codes = ['MAIN', 'B1', 'B2', 'B3'];
+  const out = {
+    legacy: !!getTemplatePath(),
+    branches: {},
+  };
+  for (const c of codes) {
+    const r = db.prepare("SELECT value FROM settings WHERE key = ?").get('sheet_template_path_' + c);
+    out.branches[c] = r && r.value && fs.existsSync(r.value) ? { path: r.value, has: true } : { has: false };
+  }
+  res.json({ ok: true, ...out });
 });
 
 router.get('/xlsx', A.requireAuth, (req, res) => {
   const date = req.query.date || currentBusinessDate();
   const branch = req.query.branch || null;
-  const tpl = getTemplatePath();
+  const tpl = getTemplatePath(branch);
   if (!tpl || !fs.existsSync(tpl)) {
     return res.status(400).json({ ok: false, error: 'no template uploaded — POST /api/sheet/template first' });
   }
@@ -227,7 +254,7 @@ router.get('/grid', A.requireAuth, (req, res) => {
   try {
     const data = buildDataForDate(db, date, branch);
     const g = buildGrid(data, branch);
-    const tpl = getTemplatePath();
+    const tpl = getTemplatePath(branch);
     const styles = tpl ? loadTemplateStyles(tpl) : { colors: [], fontColors: [], fontBold: [], tplValues: [], merges: [], colWidths: [] };
     // Build the final grid: start from the template's own labels & static
     // values (so headings like "Bank Balance Error Chek", "Total DW Details",
@@ -307,7 +334,7 @@ router.get('/html', A.requireAuth, (req, res) => {
   const date = req.query.date || currentBusinessDate();
   const editable = req.query.editable !== '0';
   const branch = req.query.branch || null;
-  const tpl = getTemplatePath();
+  const tpl = getTemplatePath(branch);
   if (!tpl || !fs.existsSync(tpl)) return res.status(400).json({ ok: false, error: 'no template uploaded' });
   try {
     // Cheap stamp for overrides: count + max(updated_at). Used to skip render.
