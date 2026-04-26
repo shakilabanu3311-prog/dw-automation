@@ -77,34 +77,48 @@ function a1(r, c) { return `${colLetter(c)}${r + 1}`; }
 function rangeA1(r1, c1, r2, c2) { return `${a1(r1, c1)}:${a1(r2, c2)}`; }
 
 // Build a single `values.batchUpdate` payload from the sheetMap-structured data.
+//
+// IMPORTANT: every block ALWAYS rewrites its full row capacity. If today
+// has fewer entries than yesterday, the "missing" rows get blanked out
+// instead of carrying yesterday's numbers — otherwise an entry that was
+// edited/deleted would still appear in Google Sheets as a ghost row.
+// This is the difference between "auto-entry" and "auto-mistake".
 function buildBatch(data, tab) {
   const reqs = [];
   const push = (r1, c1, values) => reqs.push({
     range: `'${tab}'!${rangeA1(r1, c1, r1 + values.length - 1, c1 + values[0].length - 1)}`,
     values,
   });
+  // Helper: pad an array of value-rows up to `targetLen` with blank rows
+  // (each blank row is `cols` wide). This is what kills ghost data.
+  const padBlanks = (rows, targetLen, cols) => {
+    while (rows.length < targetLen) rows.push(new Array(cols).fill(''));
+    return rows;
+  };
 
-  // ── banks: rows firstRow..firstRow+N, cols 0..7 (rewrite whole block) ──
-  if (data.banks && data.banks.length) {
-    const rows = data.banks.slice(0, M.BANK.lastRow - M.BANK.firstRow + 1).map((b, i) => [
+  // ── banks: rows firstRow..lastRow (full 50-row capacity, always) ──
+  {
+    const cap = M.BANK.lastRow - M.BANK.firstRow + 1;
+    const rows = (data.banks || []).slice(0, cap).map((b, i) => [
       i + 1, b.name || '', b.holder || '',
       Number(b.open) || 0, Number(b.credit) || 0, '', Number(b.debit) || 0,
       Number(b.closing) || 0,
     ]);
-    push(M.BANK.firstRow, 0, rows);
+    push(M.BANK.firstRow, 0, padBlanks(rows, cap, 8));
   }
 
   // ── panels: each 3-col block (deposit, freeChips, withdrawal) ──
+  // Always write the full PANEL_FIRST_ROW..PANEL_LAST_ROW range so a row
+  // that was deleted today doesn't stay populated from yesterday's push.
   if (data.panels) {
+    const panelCap = M.PANEL_LAST_ROW - M.PANEL_FIRST_ROW + 1;
     M.PANELS.forEach((p, pi) => {
       const pd = data.panels[p.slug]; if (!pd) return;
       const entries = pd.entries || [];
-      if (entries.length) {
-        const values = entries.map(e => [
-          Number(e.deposit) || 0, Number(e.freeChips) || 0, Number(e.withdrawal) || 0,
-        ]);
-        push(M.PANEL_FIRST_ROW, p.col, values);
-      }
+      const values = entries.slice(0, panelCap).map(e => [
+        Number(e.deposit) || 0, Number(e.freeChips) || 0, Number(e.withdrawal) || 0,
+      ]);
+      push(M.PANEL_FIRST_ROW, p.col, padBlanks(values, panelCap, 3));
       // DW summary
       push(M.DW_SUMMARY.firstRow + pi, M.DW_SUMMARY.cols.totalDeposit, [[
         Number(pd.totalDeposit) || 0, Number(pd.totalWithdrawal) || 0,
@@ -119,16 +133,18 @@ function buildBatch(data, tab) {
   }
 
   // ── bank & exp ledger ──
+  // Always rewrites the full range so deleted rows get blanked out.
   const writeLedger = (block, rows, hasSr) => {
-    if (!rows.length) return;
-    const values = rows.slice(0, block.lastRow - block.firstRow + 1).map((row, i) => {
-      const arr = new Array(Math.max(block.cols.debitDetails, block.cols.creditDetails) + 1).fill('');
+    const cap = block.lastRow - block.firstRow + 1;
+    const cols = Math.max(block.cols.debitDetails, block.cols.creditDetails) + 1;
+    const values = (rows || []).slice(0, cap).map((row, i) => {
+      const arr = new Array(cols).fill('');
       if (hasSr) arr[block.cols.sr] = i + 1;
       if (Number(row.credit)) { arr[block.cols.credit] = Number(row.credit); arr[block.cols.creditDetails] = row.creditDetails || ''; }
       if (Number(row.debit))  { arr[block.cols.debit]  = Number(row.debit);  arr[block.cols.debitDetails]  = row.debitDetails  || ''; }
       return arr;
     });
-    push(block.firstRow, 0, values);
+    push(block.firstRow, 0, padBlanks(values, cap, cols));
   };
   writeLedger(M.BANK_EXP,  data.bankExp || [], true);
   writeLedger(M.PARKING,   data.parking || [], false);

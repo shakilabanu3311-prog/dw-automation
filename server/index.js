@@ -95,6 +95,32 @@ function bootstrap() {
 }
 bootstrap();
 
+// Pre-warm the xlsx style cache so the first /api/sheet/html request
+// doesn't take ~7s (full-template parse). Runs in the background; if
+// it fails the request will rebuild on demand.
+setImmediate(() => {
+  try {
+    const { loadTemplateStyles } = require('./lib/xlsxWriter');
+    const fs = require('fs');
+    const codes = ['MAIN', 'B1', 'B2', 'B3', null]; // null = legacy single template
+    for (const code of codes) {
+      let tplPath = null;
+      if (code) {
+        const r = db.prepare("SELECT value FROM settings WHERE key = ?").get('sheet_template_path_' + code);
+        if (r && r.value) tplPath = r.value;
+      }
+      if (!tplPath) {
+        const r = db.prepare("SELECT value FROM settings WHERE key = 'sheet_template_path'").get();
+        if (r && r.value) tplPath = r.value;
+      }
+      if (tplPath && fs.existsSync(tplPath)) {
+        try { loadTemplateStyles(tplPath); console.log('[warmup] template styles cached:', code || 'legacy'); }
+        catch (e) { console.warn('[warmup]', code, e.message); }
+      }
+    }
+  } catch (e) { console.warn('[warmup] failed:', e.message); }
+});
+
 // Build a fresh zip from a source folder if older than the folder mtime.
 async function ensureZip(srcDir, outZip) {
   const fs = require('fs');

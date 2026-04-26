@@ -202,9 +202,17 @@ function buildDataForDate(db, business_date, branchCode) {
 // Cache of {colors, merges, colWidths} extracted from the master template.
 // Read once, reused on every /grid request — keeps the live view ditto-styled
 // without re-parsing the workbook on each call.
-let _styleCache = null;
+// Multi-entry style cache (keyed by templatePath + mtime) so each branch's
+// uploaded template gets its own warmed-up entry. Without this, switching
+// branches would invalidate the cache on every change.
+const _styleCacheMap = new Map();
+let _styleCache = null; // legacy alias kept for clarity in returns
 function loadTemplateStyles(templatePath) {
-  if (_styleCache && _styleCache._path === templatePath) return _styleCache;
+  let mtime = 0;
+  try { mtime = require('fs').statSync(templatePath).mtimeMs | 0; } catch (_) {}
+  const key = templatePath + '|' + mtime;
+  const hit = _styleCacheMap.get(key);
+  if (hit) { _styleCache = hit; return hit; }
   try {
     const wb = XLSX.readFile(templatePath, { cellStyles: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -255,8 +263,14 @@ function loadTemplateStyles(templatePath) {
       .filter(m => m.e.r < ROWS && m.e.c < COLS)
       .map(m => ({ r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c }));
     const colWidths = (ws['!cols'] || []).slice(0, COLS).map(c => c && c.wpx ? c.wpx : 0);
-    _styleCache = { _path: templatePath, colors, fontColors, fontBold, tplValues, merges, colWidths, rows: ROWS, cols: COLS };
-    return _styleCache;
+    const entry = { _path: templatePath, colors, fontColors, fontBold, tplValues, merges, colWidths, rows: ROWS, cols: COLS };
+    _styleCacheMap.set(key, entry);
+    if (_styleCacheMap.size > 12) {
+      const firstKey = _styleCacheMap.keys().next().value;
+      _styleCacheMap.delete(firstKey);
+    }
+    _styleCache = entry;
+    return entry;
   } catch (e) {
     return { colors: [], fontColors: [], fontBold: [], tplValues: [], merges: [], colWidths: [], rows: 0, cols: 0 };
   }

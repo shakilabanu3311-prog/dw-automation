@@ -759,6 +759,14 @@
     // Default tab = Live Sheet so the user always sees the sheet on login
     initLiveTab();
     loadHisab();
+    // Eager-init the other tabs in the background so when the user clicks
+    // them the data is already there — no "have to refresh page" feeling.
+    setTimeout(() => {
+      try { initSheetTab(); } catch {}
+      try { initFreeplayTab(); } catch {}
+      try { loadBanks(); } catch {}
+      try { loadPanels(); } catch {}
+    }, 250);
   }
 
   $('#bdPicker').addEventListener('change', (e) => {
