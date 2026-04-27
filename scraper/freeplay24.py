@@ -442,8 +442,20 @@ class Freeplay24Scraper:
         for h in hints:
             if h.startswith("/"):
                 try:
-                    page.goto(self.url.rstrip("/") + h,
-                              wait_until="networkidle", timeout=30_000)
+                    resp = page.goto(self.url.rstrip("/") + h,
+                                     wait_until="networkidle", timeout=30_000)
+                    # page.goto does NOT raise on 404 — explicitly reject
+                    # error responses AND pages whose title says "Not Found"
+                    # (Laravel's default 404 view) so we keep trying hints
+                    # instead of scraping an empty 404 page.
+                    if resp and resp.status >= 400:
+                        continue
+                    try:
+                        title = (page.title() or "").lower()
+                    except Exception:
+                        title = ""
+                    if "not found" in title or "404" in title:
+                        continue
                     return True
                 except Exception:
                     continue
@@ -571,8 +583,10 @@ class Freeplay24Scraper:
         # --- Withdrawal report ---
         self._xhr_blobs.clear()
         self._navigate(
-            "/withdraws/history", "/withdrawals/history", "/withdraw/history",
-            "/withdraws", "/withdrawals",
+            # Real Freeplay24 route — /withdrawals/history (NOT /withdraws/…)
+            "/withdrawals/history",
+            "/withdraws/history", "/withdraw/history",
+            "/withdrawals", "/withdraws",
             "/withdraw-request", "/withdrawal", "/withdraw",
             "Withdraw", "History",
         )
