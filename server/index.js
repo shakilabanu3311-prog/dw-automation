@@ -93,6 +93,23 @@ function bootstrap() {
       .run(admin, A.hashPassword(pass), 'admin');
     console.log(`[bootstrap] created initial admin user: ${admin} / ${pass}  (change immediately)`);
   }
+  // One-shot recovery: if ADMIN_RESET_PASS env var is set, reset the admin
+  // user's password to that value on boot. Use this when the admin forgot
+  // their password — set the env var on Railway, redeploy, then DELETE the
+  // env var (or it will keep resetting on every restart).
+  if (process.env.ADMIN_RESET_PASS) {
+    try {
+      const adminUser = process.env.ADMIN_USER || 'admin';
+      const newPass = process.env.ADMIN_RESET_PASS;
+      const r = db.prepare('UPDATE users SET password_hash = ?, is_active = 1 WHERE username = ?')
+        .run(A.hashPassword(newPass), adminUser);
+      if (r.changes) {
+        console.log(`[bootstrap] ADMIN_RESET_PASS applied: ${adminUser} password reset (DELETE this env var now)`);
+      } else {
+        console.log(`[bootstrap] ADMIN_RESET_PASS: user '${adminUser}' not found, no change`);
+      }
+    } catch (e) { console.error('[bootstrap] admin reset failed', e.message); }
+  }
   // Auto-register the bundled master sheet as the default template (for testing)
   const fs = require('fs');
   const tplDefault = path.join(__dirname, '..', 'sheet.xlsx');
