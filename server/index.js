@@ -29,28 +29,42 @@ function bootstrap() {
   // map to different real masters once go-live happens. Admin should overwrite
   // these via Settings → Panel Mapping before going live with real data.
   try {
-    const has = db.prepare("SELECT 1 FROM settings WHERE key='panel_map'").get();
+    const seed = {
+      // Testing master → real B1 panel for the dry-run.
+      'freeplay24:MAHA0001': '1XBET0001',  // ⚠ TESTING ONLY
+      // Real masters that the extension/scraper will see once live.
+      // Branch 1 — 1XBET 0001..0004
+      'freeplay24:1XBET0001': '1XBET0001',
+      'freeplay24:1XBET0002': '1XBET0002',
+      'freeplay24:1XBET0003': '1XBET0003',
+      'freeplay24:1XBET0004': '1XBET0004',
+      // Branch 2 — Laser + Radhe
+      'freeplay24:LASER0001': 'LASER0001',
+      'freeplay24:LASER0002': 'LASER0002',
+      'freeplay24:LASER0003': 'LASER0003',
+      'freeplay24:RADHE':     'RADHE',
+      // Branch 3 — Tiger Exch + 1X Club
+      'freeplay24:TIGEREXCH0001': 'TIGEREXCH0001',
+      'freeplay24:1XCLUB0001':    '1XCLUB0001',
+    };
+    const has = db.prepare("SELECT value FROM settings WHERE key='panel_map'").get();
+    let existing = {};
+    if (has && has.value) {
+      try { existing = JSON.parse(has.value) || {}; } catch (_) { existing = {}; }
+    }
+    // Merge: keep any user-customized mappings, add any new seeds that are
+    // missing. This way an old DB seeded before all 10 panels were listed
+    // gets upgraded automatically on next boot.
+    let added = 0;
+    for (const [k, v] of Object.entries(seed)) {
+      if (!(k in existing)) { existing[k] = v; added++; }
+    }
     if (!has) {
-      const seed = {
-        // Testing master → real B1 panel for the dry-run.
-        'freeplay24:MAHA0001': '1XBET0001',  // ⚠ TESTING ONLY
-        // Real masters that the extension will see once live.
-        // Branch 1 — 1XBET 0001..0004
-        'freeplay24:1XBET0001': '1XBET0001',
-        'freeplay24:1XBET0002': '1XBET0002',
-        'freeplay24:1XBET0003': '1XBET0003',
-        'freeplay24:1XBET0004': '1XBET0004',
-        // Branch 2 — Laser + Radhe
-        'freeplay24:LASER0001': 'LASER0001',
-        'freeplay24:LASER0002': 'LASER0002',
-        'freeplay24:LASER0003': 'LASER0003',
-        'freeplay24:RADHE':     'RADHE',
-        // Branch 3 — Tiger Exch + 1X Club
-        'freeplay24:TIGEREXCH0001': 'TIGEREXCH0001',
-        'freeplay24:1XCLUB0001':    '1XCLUB0001',
-      };
-      db.prepare("INSERT INTO settings(key,value) VALUES('panel_map', ?)").run(JSON.stringify(seed));
-      console.log('[bootstrap] seeded panel_map for all branches');
+      db.prepare("INSERT INTO settings(key,value) VALUES('panel_map', ?)").run(JSON.stringify(existing));
+      console.log('[bootstrap] seeded panel_map (' + Object.keys(existing).length + ' entries)');
+    } else if (added > 0) {
+      db.prepare("UPDATE settings SET value=? WHERE key='panel_map'").run(JSON.stringify(existing));
+      console.log('[bootstrap] panel_map upgraded (+' + added + ' new entries)');
     }
   } catch (e) { console.error('[bootstrap] panel_map seed failed', e.message); }
 

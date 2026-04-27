@@ -5,7 +5,6 @@
   "description": "Sync Deposit/Withdrawal entries from gaming panels into the B2C Hisab server.",
   "permissions": ["storage", "alarms", "notifications", "tabs", "scripting"],
   "host_permissions": [
-    "https://panel.freeplay24.com/*",
     "https://admin.testawl247.com/*",
     "https://testawl247.com/*",
     "http://localhost/*",
@@ -15,7 +14,6 @@
   "background": { "service_worker": "background.js" },
   "content_scripts": [{
     "matches": [
-      "https://panel.freeplay24.com/*",
       "https://admin.testawl247.com/*",
       "https://testawl247.com/*"
     ],

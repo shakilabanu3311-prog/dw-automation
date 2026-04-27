@@ -24,7 +24,10 @@
     'testawl-main':  { slug: 'testawl-main',  label: 'Testawl' },
   };
   function getSite() {
-    if (HOST.includes('freeplay24'))   return 'freeplay24';
+    // Freeplay24 is handled by the Python Playwright scraper (scraper/),
+    // because its jQuery DataTables can't be read from MV3's isolated world.
+    // The extension intentionally does nothing on freeplay24.com.
+    if (HOST.includes('freeplay24'))   return 'unknown';
     if (HOST.includes('admin.testawl'))return 'testawl-admin';
     if (HOST.includes('testawl247'))   return 'testawl-main';
     return 'unknown';

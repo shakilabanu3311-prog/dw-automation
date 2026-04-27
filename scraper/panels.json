@@ -1,0 +1,90 @@
+[
+  {
+    "name": "Test — Maha0001",
+    "user": "Maha0001",
+    "password": "Asdf@1234",
+    "master": "MAHA0001",
+    "enabled": true,
+    "note": "Testing-only login. Disable once real panels are wired."
+  },
+  {
+    "name": "Branch 1 — 1XBET0001",
+    "user": "1XBET0001",
+    "password": "",
+    "master": "1XBET0001",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 1 — 1XBET0002",
+    "user": "1XBET0002",
+    "password": "",
+    "master": "1XBET0002",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 1 — 1XBET0003",
+    "user": "1XBET0003",
+    "password": "",
+    "master": "1XBET0003",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 1 — 1XBET0004",
+    "user": "1XBET0004",
+    "password": "",
+    "master": "1XBET0004",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 2 — LASER0001",
+    "user": "LASER0001",
+    "password": "",
+    "master": "LASER0001",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 2 — LASER0002",
+    "user": "LASER0002",
+    "password": "",
+    "master": "LASER0002",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 2 — LASER0003",
+    "user": "LASER0003",
+    "password": "",
+    "master": "LASER0003",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 2 — RADHE",
+    "user": "RADHE",
+    "password": "",
+    "master": "RADHE",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 3 — TIGEREXCH0001",
+    "user": "TIGEREXCH0001",
+    "password": "",
+    "master": "TIGEREXCH0001",
+    "enabled": true,
+    "note": ""
+  },
+  {
+    "name": "Branch 3 — 1XCLUB0001",
+    "user": "1XCLUB0001",
+    "password": "",
+    "master": "1XCLUB0001",
+    "enabled": true,
+    "note": ""
+  }
+]

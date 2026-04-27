@@ -337,10 +337,26 @@ router.get('/html', A.requireAuth, (req, res) => {
   const tpl = getTemplatePath(branch);
   if (!tpl || !fs.existsSync(tpl)) return res.status(400).json({ ok: false, error: 'no template uploaded' });
   try {
-    // Cheap stamp for overrides: count + max(updated_at). Used to skip render.
+    // Cheap stamp combining EVERY data source the renderer reads, so any
+    // ingest (panel scrape, bank PDF, GPay statement, manual edit) busts
+    // the cache and the user sees the new row on the next /html GET. Was
+    // previously only `sheet_overrides` — meant ingested rows didn't show
+    // up until the cache evicted (~30 entries later).
     const ovStamp = (() => {
-      const r = db.prepare("SELECT COUNT(*) c, COALESCE(MAX(updated_at),'') u FROM sheet_overrides WHERE business_date = ?").get(date);
-      return `${r.c}@${r.u}`;
+      const r = db.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM sheet_overrides WHERE business_date = ?)        AS oc,
+          (SELECT COALESCE(MAX(updated_at),'') FROM sheet_overrides WHERE business_date = ?) AS ou,
+          (SELECT COUNT(*) FROM bank_txns      WHERE business_date = ?)        AS bc,
+          (SELECT COALESCE(MAX(id),0) FROM bank_txns WHERE business_date = ?)  AS bm,
+          (SELECT COUNT(*) FROM dw             WHERE business_date = ?)        AS dc,
+          (SELECT COALESCE(MAX(id),0) FROM dw   WHERE business_date = ?)       AS dm,
+          (SELECT COUNT(*) FROM gpay           WHERE business_date = ?)        AS gc,
+          (SELECT COALESCE(MAX(id),0) FROM gpay WHERE business_date = ?)       AS gm,
+          (SELECT COUNT(*) FROM expenses       WHERE business_date = ?)        AS ec,
+          (SELECT COALESCE(MAX(id),0) FROM expenses WHERE business_date = ?)   AS em
+      `).get(date, date, date, date, date, date, date, date, date, date);
+      return `o${r.oc}@${r.ou}|b${r.bc}#${r.bm}|d${r.dc}#${r.dm}|g${r.gc}#${r.gm}|e${r.ec}#${r.em}`;
     })();
     const ck = cacheKey(tpl, date, editable, ovStamp) + '|' + (branch || 'MAIN');
     const hit = _htmlCache.get(ck);

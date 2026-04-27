@@ -188,7 +188,14 @@
     if (liveTimer) clearInterval(liveTimer);
     liveTimer = setInterval(() => {
       if (!$('#tab-live').classList.contains('active')) return;
-      if ($('#liveView').value === 'local' && $('#liveAuto').checked) renderLiveGrid(true);
+      if ($('#liveView').value !== 'local' || !$('#liveAuto').checked) return;
+      // Don't yank the DOM out from under the user mid-edit. If a cell
+      // is focused (contenteditable) OR a save is in flight, skip this
+      // auto-tick — the next blur/save will trigger a fresh render anyway.
+      const ae = document.activeElement;
+      if (ae && ae.closest && ae.closest('#liveGrid td[contenteditable]')) return;
+      if (window._liveSaveInFlight) return;
+      renderLiveGrid(true);
     }, 10000);
   }
   // Rollover banner: shows countdown to next 05:30 IST + last-rollover info.
@@ -281,12 +288,14 @@
           const newVal = td.textContent.trim();
           if (newVal === td._orig) return;
           const r2 = +td.dataset.r, c2 = +td.dataset.c;
+          window._liveSaveInFlight = true;
           try {
             await api('/api/sheet/cell', { method: 'POST', body: { date: d, row: r2, col: c2, value: newVal } });
             td._orig = newVal;
             td.style.outline = '2px solid #29d08c';
             setTimeout(() => { td.style.outline = ''; }, 800);
           } catch (e) { toast('Save failed: ' + e.message, true); td.textContent = orig; }
+          finally { window._liveSaveInFlight = false; }
         });
         td.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') { e.preventDefault(); td.blur(); }
@@ -377,12 +386,14 @@
           const newVal = td.textContent.trim();
           if (newVal === td._orig) return;
           const r2 = +td.dataset.r, c2 = +td.dataset.c;
+          window._liveSaveInFlight = true;
           try {
             await api('/api/sheet/cell', { method: 'POST', body: { date: d, row: r2, col: c2, value: newVal } });
             td._orig = newVal;
             td.style.outline = '2px solid #29d08c';
             setTimeout(() => { td.style.outline = ''; }, 800);
           } catch (e) { toast('Save failed: ' + e.message, true); td.textContent = orig; }
+          finally { window._liveSaveInFlight = false; }
         });
         td.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') { e.preventDefault(); td.blur(); }

@@ -169,9 +169,17 @@ router.post('/panel', A.requireAuthOrToken, (req, res) => {
       else if (tsRaw) bd = businessDate(tsRaw + 'T12:00:00+05:30');
       else bd = currentBusinessDate();
       const utr = e.utr || '';
-      // Dedupe key: prefer UTR (panel-side unique). Fall back to a composite
-      // (date|amount|name) keyed per slug so the same row doesn't ingest twice.
-      const extRef = utr ? `${slug}:${utr}` : `${slug}:${tsRaw || ''}|${e.amount}|${(e.name || '').trim()}`;
+      // Dedupe key: prefer UTR (panel-side unique). Treat blank, "-", and
+      // "0" as MISSING so panels that show "-" for non-UTR rows (eg. cash
+      // settlements) don't all collapse onto the same ext_ref and get
+      // dropped as duplicates of each other.
+      const utrKey = (utr && utr.trim() && utr.trim() !== '-' && utr.trim() !== '0')
+        ? utr.trim() : '';
+      // Fall back to a composite (ts|amount|name) keyed per slug+type so the
+      // same row doesn't ingest twice but distinct empty-UTR rows survive.
+      const extRef = utrKey
+        ? `${slug}:${utrKey}`
+        : `${slug}:${type}:${tsRaw || ''}|${e.amount}|${(e.name || '').trim()}`;
       const info = ins.run(bd, tsRaw, slug, type, Number(e.amount) || 0, e.name || '', utr,
                            e.bank || '', 'extension', extRef, req.user.id);
       if (info.changes) inserted++; else skipped++;
