@@ -827,6 +827,41 @@
     // Mirror the same options into the paste-text bank dropdown.
     const bsBankPaste = $('#bs-bank-paste');
     if (bsBankPaste && $('#bs-bank')) bsBankPaste.innerHTML = $('#bs-bank').innerHTML;
+
+    // Wire the "type to filter banks" input next to each bank dropdown so
+    // the operator can search 170+ Indian banks instead of scrolling. The
+    // first matching option is auto-selected so the search is one-keystroke.
+    $$('input[data-target]').forEach(inp => {
+      if (inp._wiredFilter) return;
+      inp._wiredFilter = true;
+      const sel = $(inp.dataset.target);
+      if (!sel) return;
+      // Remember the original options so we can restore them after a search.
+      sel._allOptionsHtml = sel._allOptionsHtml || sel.innerHTML;
+      inp.addEventListener('input', () => {
+        const q = inp.value.trim().toLowerCase();
+        // Reset to all options first
+        sel.innerHTML = sel._allOptionsHtml;
+        if (!q) return;
+        // Filter: hide options whose label doesn't contain the query string
+        let firstMatch = null;
+        $$('option, optgroup', sel).forEach(node => {
+          if (node.tagName === 'OPTGROUP') {
+            // hide an optgroup if no child matches
+            const anyMatch = [...node.querySelectorAll('option')]
+              .some(o => o.textContent.toLowerCase().includes(q));
+            node.style.display = anyMatch ? '' : 'none';
+            return;
+          }
+          if (!node.textContent.toLowerCase().includes(q) && node.value !== '') {
+            node.style.display = 'none';
+          } else if (!firstMatch && node.value !== '') {
+            firstMatch = node;
+          }
+        });
+        if (firstMatch) sel.value = firstMatch.value;
+      });
+    });
     $('#dw-panel').innerHTML = popts;
     $('#gp-panel').innerHTML = popts;
   }

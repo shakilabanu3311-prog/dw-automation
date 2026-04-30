@@ -12,9 +12,9 @@
 
 const ALL_BANKS = [
   // ───────────── Public-sector / nationalised ─────────────
-  ['SBI',        /STATE\s+BANK\s+OF\s+INDIA|\bSBIINB\b|\bSBIUPI\b|\bSBI\b|\bSBIN\b/i, 'psu'],
-  ['PNB',        /PUNJAB\s+NATIONAL\s+BANK|\bPUNB\b|\bPNB\b/i, 'psu'],
-  ['BOB',        /BANK\s+OF\s+BARODA|\bBARB\b|\bBOB\b/i, 'psu'],
+  ['SBI',        /STATE\s+BANK\s+OF\s+INDIA|\bSBIINB\b|\bSBIUPI\b|\bSBIN0/i, 'psu'],
+  ['PNB',        /PUNJAB\s+NATIONAL\s+BANK|\bPUNB0/i, 'psu'],
+  ['BOB',        /BANK\s+OF\s+BARODA|\bBARB0/i, 'psu'],
   ['CANARA',     /CANARA\s+BANK|\bCNRB\b/i, 'psu'],
   ['UNION',      /UNION\s+BANK\s+OF\s+INDIA|\bUBIN\b|UNION\s+BANK/i, 'psu'],
   ['BOI',        /BANK\s+OF\s+INDIA|\bBKID\b/i, 'psu'],
@@ -26,21 +26,26 @@ const ALL_BANKS = [
   ['PSB',        /PUNJAB\s+&\s+SIND\s+BANK|\bPSIB\b/i, 'psu'],
 
   // ───────────── Private-sector ────────────────────────────
-  ['HDFC',       /HDFC\s+BANK|\bHDFC\b/i, 'private'],
-  ['ICICI',      /ICICI\s+BANK|\bICIC\b|\bICICI\b/i, 'private'],
-  ['AXIS',       /AXIS\s+BANK|\bUTIB\b|\bAXIS\b|\bAXISBK\b/i, 'private'],
-  ['KOTAK',      /KOTAK\s+MAHINDRA|\bKKBK\b|\bKOTAK\b/i, 'private'],
-  ['INDUSIND',   /INDUSIND\s+BANK|\bINDB\b|\bINDUS\b/i, 'private'],
-  ['YES',        /YES\s+BANK|\bYESB\b|\bYESBNK\b/i, 'private'],
-  ['IDFC',       /IDFC\s+(?:FIRST\s+)?BANK|\bIDFB\b/i, 'private'],
-  ['FEDERAL',    /FEDERAL\s+BANK|\bFDRL\b/i, 'private'],
-  ['RBL',        /\bRBL\s+BANK\b|\bRATN\b/i, 'private'],
-  ['IDBI',       /\bIDBI\s+BANK\b|\bIBKL\b/i, 'private'],
-  ['SOUTHIND',   /SOUTH\s+INDIAN\s+BANK|\bSIBL\b/i, 'private'],
-  ['KARURVYSYA', /KARUR\s+VYSYA|\bKVBL\b/i, 'private'],
-  ['KARNATAKA',  /KARNATAKA\s+BANK|\bKARB\b/i, 'private'],
-  ['CITYUNION',  /CITY\s+UNION\s+BANK|\bCIUB\b/i, 'private'],
-  ['DCB',        /\bDCB\s+BANK\b|\bDCBL\b|\bDCB\b/i, 'private'],
+  // Removed bare-code fallbacks (\bHDFC\b, \bDCB\b, etc.) — they triggered
+  // false-positive matches on substrings appearing in unrelated statements.
+  // The bank's full name OR its IFSC prefix is unique enough.
+  ['HDFC',       /HDFC\s+BANK|\bHDFCN\d|\bHDFC0/i, 'private'],
+  ['ICICI',      /ICICI\s+BANK|\bICIC0/i, 'private'],
+  ['AXIS',       /AXIS\s+BANK|\bUTIB0|\bAXISBK\b/i, 'private'],
+  ['KOTAK',      /KOTAK\s+MAHINDRA|KOTAK\s+BANK|\bKKBK0/i, 'private'],
+  ['INDUSIND',   /INDUSIND\s+BANK|\bINDB0/i, 'private'],
+  ['YES',        /YES\s+BANK|\bYESB0/i, 'private'],
+  ['IDFC',       /IDFC\s+(?:FIRST\s+)?BANK|\bIDFB0/i, 'private'],
+  ['FEDERAL',    /FEDERAL\s+BANK|\bFDRL0/i, 'private'],
+  ['RBL',        /\bRBL\s+BANK\b|\bRATN0/i, 'private'],
+  ['IDBI',       /\bIDBI\s+BANK\b|\bIBKL0/i, 'private'],
+  ['SOUTHIND',   /SOUTH\s+INDIAN\s+BANK|\bSIBL0/i, 'private'],
+  ['KARURVYSYA', /KARUR\s+VYSYA|\bKVBL0/i, 'private'],
+  ['KARNATAKA',  /KARNATAKA\s+BANK|\bKARB0/i, 'private'],
+  ['CITYUNION',  /CITY\s+UNION\s+BANK|\bCIUB0/i, 'private'],
+  // DCB requires "DCB BANK" together (drops bare \bDCB\b that misfired on
+  // unrelated codes).
+  ['DCB',        /\bDCB\s+BANK\b|\bDCBL0/i, 'private'],
   ['TMB',        /TAMILNAD\s+MERCANTILE|\bTMBL\b/i, 'private'],
   ['DHANLAXMI',  /DHANLAXMI\s+BANK|\bDLXB\b/i, 'private'],
   ['JAMMUKASHMIR', /JAMMU\s+AND\s+KASHMIR|J\s?&\s?K\s+BANK|\bJAKA\b/i, 'private'],

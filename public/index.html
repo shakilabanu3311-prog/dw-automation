@@ -190,6 +190,7 @@
         <div class="row">
           <input type="file" id="bsFile" accept="application/pdf"/>
           <button class="primary" id="bsPreviewBtn">Preview (auto-detect bank)</button>
+          <input type="text" id="bs-bank-search" placeholder="🔍 type to filter banks…" data-target="#bs-bank" style="min-width:160px"/>
           <select id="bs-bank" title="Override if auto-detect picks the wrong bank"><option value="">(auto-detect)</option></select>
         </div>
         <div id="bsPreview"></div>
@@ -207,6 +208,7 @@
         </div>
         <div class="row" style="margin-top:8px">
           <button class="primary" id="bsPastePreviewBtn">Preview pasted text</button>
+          <input type="text" id="bs-bank-paste-search" placeholder="🔍 type to filter banks…" data-target="#bs-bank-paste" style="min-width:160px"/>
           <select id="bs-bank-paste" title="Override if auto-detect picks the wrong bank"><option value="">(auto-detect)</option></select>
         </div>
         <div id="bsPastePreview"></div>

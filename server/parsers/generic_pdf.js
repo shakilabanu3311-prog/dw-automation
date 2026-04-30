@@ -34,7 +34,10 @@ function parseDate(raw) {
 }
 
 // Line-level classification heuristics.
-const CHARGE_RE   = /\b(?:IMPS\s*Charges?|SMS\s*(?:CHG|CHARGE)|ATM\s*(?:CHG|CHARGE)|SGST|CGST|IGST|GST|SERVICE\s*CHG|MIN\s*BAL|COMMISSION|PENALTY|FEES?)\b/i;
+// CHARGE_RE was too narrow — generic narrations like "IMPS CHG", "NEFT CHG",
+// "MAB CHG", "DCBCWD CHG", any mention of "CHARGE", "CHG", "FEE", or tax
+// categories should all flow into the BANK_EXP ledger as bank charge.
+const CHARGE_RE   = /\b(?:CHARGES?|CHG|CHGS|CHRG|FEE|FEES|PENALTY|FINE|LEVY|LEVIED|COMMISSION|COMM|GST|SGST|CGST|IGST|TDS|MIN[\s\-]*BAL|MAB|AMB|NMC|SMS\s*CHARG|SERVICE\s*CHARG|SERV\s*TAX|MAINT(?:ENANCE)?\s*CHG)\b/i;
 const ATM_WD_RE   = /\bATM[\/\-]/i;
 const UPI_RE      = /\bUPI\b/i;
 const IMPS_RE     = /\bIMPS\b/i;

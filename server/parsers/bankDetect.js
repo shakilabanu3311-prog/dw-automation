@@ -47,25 +47,56 @@ const EXTRA = [
 // that happens to mention a different bank.
 function detectBankCode(text) {
   if (!text) return null;
-  const head = text.slice(0, 3000) + ' ' + text.slice(-1500);
-  // Pass 1 — header
-  for (const [code, re] of ALL_BANKS) if (re.test(head)) return code;
-  for (const s of EXTRA) if (s.re.test(head)) return s.bank;
-  for (const s of BANK_SIGNATURES) if (s.re.test(head)) return s.bank;
-
-  // Pass 2 — scan ALL text, count hits, pick the most-mentioned bank
+  const head = text.slice(0, 4000);
+  const tail = text.slice(-2000);
+  const headTail = head + ' ' + tail;
+  // Always score every bank instead of returning the first regex hit. The
+  // old "first-hit-wins" pass was order-dependent — common short codes like
+  // \bDCB\b would fire on substrings in unrelated statements and ship the
+  // wrong bank to commit. Scoring fixes the misdetect by letting the
+  // highest-mentioned bank win, with a heavy bonus for header/footer
+  // matches (where the bank's legal name actually lives).
   const tally = new Map();
   const bump = (code, n) => tally.set(code, (tally.get(code) || 0) + n);
+  const countAll = (re, body) => {
+    try {
+      const flags = re.flags.includes('g') ? re.flags : re.flags + 'g';
+      const m = body.match(new RegExp(re.source, flags));
+      return m ? m.length : 0;
+    } catch (_) { return 0; }
+  };
+
+  // 1. Header/footer pass — heavy weight (5x). The bank's full legal name,
+  //    address, and IFSC prefix usually appear at the very top or in the
+  //    statement footer.
   for (const [code, re] of ALL_BANKS) {
-    const m = text.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g'));
-    if (m) bump(code, m.length);
+    const n = countAll(re, headTail);
+    if (n) bump(code, n * 5);
   }
   for (const s of EXTRA) {
-    const m = text.match(new RegExp(s.re.source, s.re.flags.includes('g') ? s.re.flags : s.re.flags + 'g'));
-    if (m) bump(s.bank, m.length);
+    const n = countAll(s.re, headTail);
+    if (n) bump(s.bank, n * 5);
   }
+
+  // 2. Full-body pass — light weight (1x). Adds confidence when the same
+  //    bank's IFSC/UPI prefix is repeated in transactions.
+  for (const [code, re] of ALL_BANKS) {
+    const n = countAll(re, text);
+    if (n) bump(code, n);
+  }
+  for (const s of EXTRA) {
+    const n = countAll(s.re, text);
+    if (n) bump(s.bank, n);
+  }
+
   if (!tally.size) return null;
-  return [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  // Tie-break: longer/more-specific bank codes win when scores match. This
+  // keeps "DCB" from beating "ICICI" or "HDFC" on a draw.
+  const ranked = [...tally.entries()].sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return b[0].length - a[0].length;
+  });
+  return ranked[0][0];
 }
 
 // Cross-check: the detected bank should have at least a few txns whose
