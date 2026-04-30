@@ -112,9 +112,6 @@ function buildBatch(data, tab) {
   // that was deleted today doesn't stay populated from yesterday's push.
   if (data.panels) {
     const panelCap = M.PANEL_LAST_ROW - M.PANEL_FIRST_ROW + 1;
-    // Use full all-branches list (same fix as xlsxWriter) so LASER /
-    // RADHE / TIGEREXCH / 1XCLUB scraped rows actually get pushed to
-    // Google Sheets, not just 1XBET 1-6.
     const allPanels = M.getBranch('MAIN').panels;
     allPanels.forEach((p, pi) => {
       const pd = data.panels[p.slug]; if (!pd) return;
@@ -123,12 +120,24 @@ function buildBatch(data, tab) {
         Number(e.deposit) || 0, Number(e.freeChips) || 0, Number(e.withdrawal) || 0,
       ]);
       push(M.PANEL_FIRST_ROW, p.col, padBlanks(values, panelCap, 3));
-      // CRITICAL: do NOT push to DW_SUMMARY or CHIPS_SUMMARY cells. The
-      // Google Sheet template has formulas there (=O3+P3, =Q3, etc.) and
-      // sheets.values.update would replace them with literal numbers,
-      // permanently destroying the live SUM behaviour. The user's totals
-      // must come from the template's own formulas reading the per-entry
-      // cells we just wrote at PANEL_FIRST_ROW.. PANEL_LAST_ROW.
+      // SELF-HEAL the row-3 SUM formulas. An earlier buggy version of
+      // this code wrote a literal value into row 3 (the totals row),
+      // permanently replacing the =SUM(O4:O1000) formula with a stale
+      // number. Re-inject the formulas on every push so user totals
+      // always recompute live. Uses USER_ENTERED so '=SUM(...)' is
+      // parsed as a formula instead of a literal string.
+      const dCol = colLetter(p.col + M.PANEL_COL.deposit);
+      const fCol = colLetter(p.col + M.PANEL_COL.freeChips);
+      const wCol = colLetter(p.col + M.PANEL_COL.withdrawal);
+      reqs.push({
+        range: `'${tab}'!${a1(2, p.col)}:${a1(2, p.col + 2)}`,
+        values: [[
+          `=SUM(${dCol}4:${dCol}1000)`,
+          `=SUM(${fCol}4:${fCol}1000)`,
+          `=SUM(${wCol}4:${wCol}1000)`,
+        ]],
+        _formulas: true, // marker so the sender uses USER_ENTERED
+      });
     });
   }
 
@@ -162,10 +171,28 @@ async function pushBranchToGoogleSheet(db, business_date, branchCode) {
   const data = buildDataForDate(db, business_date, branchCode);
   const reqs = buildBatch(data, cfg.tab);
   if (!reqs.length) return { branch: branchCode, sheetId, updated: 0 };
-  const resp = await svc.spreadsheets.values.batchUpdate({
-    spreadsheetId: sheetId,
-    requestBody: { valueInputOption: 'RAW', data: reqs },
-  });
+  // Split into two batches so formulas survive: RAW for literal values
+  // (numbers stay numbers, no auto-parsing), USER_ENTERED for the
+  // self-healing SUM formulas (so '=SUM(O4:O1000)' is treated as a
+  // formula, not a literal string).
+  const formulaReqs = reqs.filter(r => r._formulas).map(r => ({ range: r.range, values: r.values }));
+  const literalReqs = reqs.filter(r => !r._formulas).map(r => ({ range: r.range, values: r.values }));
+  let updated = 0;
+  if (literalReqs.length) {
+    const resp1 = await svc.spreadsheets.values.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { valueInputOption: 'RAW', data: literalReqs },
+    });
+    updated += resp1.data.totalUpdatedCells || 0;
+  }
+  if (formulaReqs.length) {
+    const resp2 = await svc.spreadsheets.values.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { valueInputOption: 'USER_ENTERED', data: formulaReqs },
+    });
+    updated += resp2.data.totalUpdatedCells || 0;
+  }
+  const resp = { data: { totalUpdatedCells: updated } };
   return {
     branch: branchCode,
     updated: resp.data.totalUpdatedCells || 0,
