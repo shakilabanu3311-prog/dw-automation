@@ -92,9 +92,14 @@ const BRANCHES = [
   {
     code: 'MAIN', name: 'Main (aggregate)',
     is_aggregate: true,
-    // MAIN's panels = concat of all branches; recomputed at runtime so adding
-    // a branch automatically extends MAIN.
-    panels: null,
+    // MAIN uses the canonical 6 1XBET slots that match the master template
+    // labels (O = 1XBET0001, S = 1XBET0002, ..., AI = 1XBET0006). Panels
+    // beyond col 34 in the template are BANK BLOCKS, not panel slots —
+    // writing LASER/RADHE/TIGEREXCH/1XCLUB into cols 38+ would CORRUPT
+    // the bank-tracking blocks (Open Bank Balance / Cradit Amt / Closing).
+    // When the user uploads separate templates for B2/B3 with their own
+    // labelled panel columns, switch the branch dropdown to view those.
+    panels: PANELS,
   },
 ];
 function getBranch(code) {
