@@ -70,20 +70,23 @@ router.post('/commit/bank-statement', A.requireAuth, async (req, res) => {
   // withdrawal entries — only bank_txns. The Chrome extension (panel
   // scrape) is the single source of truth for D/W. Reconciliation
   // happens on the sheet, not at ingest time.
+  const tombstoned = db.prepare(`SELECT 1 FROM deleted_ext_refs WHERE ext_ref = ?`);
+  let tombstones = 0;
   const tx = db.transaction((items) => {
     for (const r of items) {
       if (r.skip) { skipped++; continue; }
       const bd = r.business_date || businessDate(r.date + 'T12:00:00+05:30') || currentBusinessDate();
       const type = (r.entryKind === 'bank_charge') ? 'debit' : r.type;
       const category = r.entryKind === 'bank_charge' ? 'charge' : 'bank';
+      if (r.ext_ref && tombstoned.get(r.ext_ref)) { tombstones++; continue; }
       const info = insBank.run(bd, r.date || null, Number(bank_id), type, Number(r.amt) || 0, r.narration || '',
                                category, 'statement', r.ext_ref || null, req.user.id);
       if (info.changes) insertedBank++; else skipped++;
     }
   });
   tx(rows);
-  audit(req.user.id, 'ingest', 'bank_statement', null, { bank_id, insertedBank, insertedDw, skipped });
-  res.json({ ok: true, insertedBank, insertedDw, skipped });
+  audit(req.user.id, 'ingest', 'bank_statement', null, { bank_id, insertedBank, insertedDw, skipped, tombstones });
+  res.json({ ok: true, insertedBank, insertedDw, skipped, tombstones });
 });
 
 // ── GPAY ─────────────────────────────────────────────────────
@@ -105,18 +108,21 @@ router.post('/commit/gpay-statement', A.requireAuth, (req, res) => {
   let inserted = 0, skipped = 0;
   const ins = db.prepare(`INSERT OR IGNORE INTO gpay(business_date, ts, type, amt, name, utr, remark, source, ext_ref, created_by)
                           VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const tombstoned = db.prepare(`SELECT 1 FROM deleted_ext_refs WHERE ext_ref = ?`);
+  let tombstones = 0;
   const tx = db.transaction((items) => {
     for (const r of items) {
       if (r.skip) { skipped++; continue; }
       const bd = r.business_date || currentBusinessDate();
+      if (r.ext_ref && tombstoned.get(r.ext_ref)) { tombstones++; continue; }
       const info = ins.run(bd, r.ts || null, r.type, Number(r.amt) || 0, r.name || '', r.utr || '',
                            r.remark || '', 'statement', r.ext_ref || null, req.user.id);
       if (info.changes) inserted++; else skipped++;
     }
   });
   tx(rows);
-  audit(req.user.id, 'ingest', 'gpay_statement', null, { inserted, skipped });
-  res.json({ ok: true, inserted, skipped });
+  audit(req.user.id, 'ingest', 'gpay_statement', null, { inserted, skipped, tombstones });
+  res.json({ ok: true, inserted, skipped, tombstones });
 });
 
 // ── PANEL (Chrome extension) ─────────────────────────────────
@@ -157,7 +163,8 @@ router.post('/panel', A.requireAuthOrToken, (req, res) => {
 
   const ins = db.prepare(`INSERT OR IGNORE INTO dw(business_date, ts, panel_slug, type, amt, name, utr, remark, source, ext_ref, created_by)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
-  let inserted = 0, skipped = 0;
+  const tombstoned = db.prepare(`SELECT 1 FROM deleted_ext_refs WHERE ext_ref = ?`);
+  let inserted = 0, skipped = 0, tombstones = 0;
   const tx = db.transaction((items, type) => {
     for (const e of items) {
       // Prefer full ISO ts (date+time+TZ) sent by the extension; fall back
@@ -180,6 +187,8 @@ router.post('/panel', A.requireAuthOrToken, (req, res) => {
       const extRef = utrKey
         ? `${slug}:${utrKey}`
         : `${slug}:${type}:${tsRaw || ''}|${e.amount}|${(e.name || '').trim()}`;
+      // Operator deleted this exact ext_ref before — DON'T re-insert.
+      if (tombstoned.get(extRef)) { tombstones++; continue; }
       const info = ins.run(bd, tsRaw, slug, type, Number(e.amount) || 0, e.name || '', utr,
                            e.bank || '', 'extension', extRef, req.user.id);
       if (info.changes) inserted++; else skipped++;
@@ -194,8 +203,21 @@ router.post('/panel', A.requireAuthOrToken, (req, res) => {
   db.prepare(`INSERT INTO settings(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
     .run(`panel_last_sync:${sourceKey}`, new Date().toISOString());
 
-  audit(req.user.id, 'ingest', 'panel:' + sourceKey, null, { inserted, skipped, slug, mapped });
-  res.json({ ok: true, inserted, skipped, panel_slug: slug, mapped, source: sourceKey });
+  audit(req.user.id, 'ingest', 'panel:' + sourceKey, null, { inserted, skipped, tombstones, slug, mapped });
+  res.json({ ok: true, inserted, skipped, tombstones, panel_slug: slug, mapped, source: sourceKey });
+});
+
+// Admin: list / clear tombstones (un-suppress a previously-deleted ext_ref
+// so the next ingest can re-insert it if needed).
+router.get('/tombstones', A.requireAuth, (req, res) => {
+  const rows = db.prepare(`SELECT ext_ref, table_name, deleted_at FROM deleted_ext_refs
+                           ORDER BY deleted_at DESC LIMIT 500`).all();
+  res.json({ ok: true, rows });
+});
+router.delete('/tombstones/:extRef', A.requireAuth, (req, res) => {
+  db.prepare('DELETE FROM deleted_ext_refs WHERE ext_ref = ?').run(req.params.extRef);
+  audit(req.user.id, 'untombstone', 'ext_ref', null, { ext_ref: req.params.extRef });
+  res.json({ ok: true });
 });
 
 // Read/write the panel_map settings entry. Used by the Settings UI.

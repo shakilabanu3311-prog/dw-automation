@@ -10,6 +10,76 @@ const M = require('./sheetMap');
 
 function addr(r, c) { return XLSX.utils.encode_cell({ r, c }); }
 
+// Lazy HyperFormula loader so a missing dep doesn't crash the server boot.
+let _HF = null;
+function loadHF() {
+  if (_HF !== null) return _HF;
+  try { _HF = require('hyperformula'); }
+  catch (e) { _HF = false; console.warn('[xlsx] hyperformula not installed; multi-cell formulas will use cached values'); }
+  return _HF;
+}
+
+// Recompute every formula in `ws` (a SheetJS worksheet) against the LIVE
+// cell values, writing results back to cell.v. SUM, arithmetic, IF, etc.
+// are all evaluated. Single-cell mirror formulas (=A1) are also covered.
+function recomputeFormulas(ws) {
+  const hfMod = loadHF();
+  if (!hfMod) return;
+  const HyperFormula = hfMod.HyperFormula || hfMod.default || hfMod;
+  if (!HyperFormula || !HyperFormula.buildEmpty) return;
+
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  const ROWS = range.e.r + 1;
+  const COLS = range.e.c + 1;
+
+  // Build a 2D array: formulas as strings ("=SUM(...)"), values as numbers/
+  // strings. HyperFormula expects strings starting with "=" to be formulas.
+  const data = new Array(ROWS);
+  for (let r = 0; r < ROWS; r++) {
+    const row = new Array(COLS).fill(null);
+    for (let c = 0; c < COLS; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (!cell) continue;
+      if (cell.f) {
+        const f = String(cell.f);
+        row[c] = f.startsWith('=') ? f : '=' + f;
+      } else if (cell.v !== undefined && cell.v !== null) {
+        row[c] = cell.v;
+      }
+    }
+    data[r] = row;
+  }
+
+  let hf;
+  try {
+    hf = HyperFormula.buildFromArray(data, { licenseKey: 'gpl-v3' });
+  } catch (e) {
+    console.warn('[xlsx] HyperFormula build failed:', e.message);
+    return;
+  }
+
+  // Walk every formula cell, ask HF for the computed value, write back.
+  const sheetId = hf.getSheetId(hf.getSheetNames()[0]);
+  for (const a of Object.keys(ws)) {
+    if (a.startsWith('!')) continue;
+    const cell = ws[a];
+    if (!cell || !cell.f) continue;
+    const { r, c } = XLSX.utils.decode_cell(a);
+    let val;
+    try { val = hf.getCellValue({ sheet: sheetId, row: r, col: c }); }
+    catch (_) { continue; }
+    if (val == null) continue;
+    // HyperFormula returns objects like {error,...} for #REF!, #DIV/0!, etc.
+    if (typeof val === 'object') {
+      if (val.error) { cell.v = val.error; cell.t = 's'; }
+      continue;
+    }
+    cell.v = val;
+    cell.t = (typeof val === 'number') ? 'n' : (typeof val === 'boolean') ? 'b' : 's';
+  }
+  hf.destroy();
+}
+
 function writeCell(ws, r, c, value) {
   if (value === undefined || value === null || value === '') return;
   const a = addr(r, c);
@@ -382,14 +452,9 @@ function renderTemplateAsHtml(templatePath, opts = {}) {
   }
 
   // ── Lightweight formula re-evaluation for SINGLE-CELL references ────
-  // The template uses formulas like `=AZ1` to mirror a bank-card label
-  // ("BANK NAME") into the left summary column. SheetJS keeps the cached
-  // result, so until we re-evaluate, typing a real bank name into AZ1
-  // wouldn't update C5 in the rendered HTML. Walk every cell with a
-  // formula matching the simple `=COL+ROW` pattern and copy the target's
-  // current value. Multi-cell formulas (SUM, arithmetic) are left to
-  // their cached values — those are recomputed on download via a real
-  // engine elsewhere.
+  // Cheap pass for `=A1`-style mirror cells (bank-card labels copied into
+  // summary columns). Done before the heavyweight HyperFormula pass so the
+  // engine sees the freshest leaf values.
   for (const a of Object.keys(ws)) {
     if (a.startsWith('!')) continue;
     const cell = ws[a];
@@ -402,6 +467,18 @@ function renderTemplateAsHtml(templatePath, opts = {}) {
       cell.v = tgt.v;
       cell.t = tgt.t || (typeof tgt.v === 'number' ? 'n' : 's');
     }
+  }
+
+  // ── Multi-cell formula re-evaluation (SUM, arithmetic) ───────────────
+  // Without this, the "Total Bank Balance", "Bank Balance Error Chek" and
+  // panel-totals rows show whatever Excel last cached when the template
+  // was uploaded — totally wrong once live values land in the source
+  // cells. We feed the worksheet to HyperFormula, recompute every formula
+  // against the LIVE cell values, and copy the results back into `cell.v`.
+  try {
+    recomputeFormulas(ws);
+  } catch (e) {
+    console.warn('[xlsx] formula recompute failed (using cached values):', e.message);
   }
 
   // Trim to content extent so the HTML isn't 23 MB of empties

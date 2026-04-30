@@ -153,6 +153,18 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 
+-- Tombstones: when an operator deletes a scraped row (dw / gpay / bank_txns)
+-- we record its ext_ref here so the next ingest cycle SKIPS it instead of
+-- re-inserting the same row. Without this, deletes silently undo themselves
+-- on the next scrape because ext_ref is the dedupe key — once the row is
+-- gone, the dedupe check passes and the row is re-inserted.
+CREATE TABLE IF NOT EXISTS deleted_ext_refs (
+  ext_ref TEXT PRIMARY KEY,
+  table_name TEXT NOT NULL,
+  deleted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_by INTEGER REFERENCES users(id)
+);
+
 -- Manual cell overrides on the live sheet — lets the user type into any
 -- cell in the Live Sheet and have it stick. (row,col) are 0-indexed grid
 -- coordinates; business_date scopes the override to a specific day's sheet.

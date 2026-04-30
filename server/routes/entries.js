@@ -107,8 +107,17 @@ router.post('/bank-txns', (req, res) => {
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 router.delete('/bank-txns/:id', (req, res) => {
-  db.prepare('DELETE FROM bank_txns WHERE id = ?').run(Number(req.params.id));
-  audit(req.user.id, 'delete', 'bank_txn', req.params.id);
+  const id = Number(req.params.id);
+  // Tombstone the ext_ref BEFORE delete so the next ingest cycle skips
+  // re-inserting the same row (otherwise scrapers/uploaders silently undo
+  // every delete).
+  const row = db.prepare('SELECT ext_ref FROM bank_txns WHERE id = ?').get(id);
+  if (row && row.ext_ref) {
+    db.prepare(`INSERT OR IGNORE INTO deleted_ext_refs(ext_ref, table_name, deleted_by)
+                VALUES (?,?,?)`).run(row.ext_ref, 'bank_txns', req.user.id);
+  }
+  db.prepare('DELETE FROM bank_txns WHERE id = ?').run(id);
+  audit(req.user.id, 'delete', 'bank_txn', id);
   res.json({ ok: true });
 });
 
@@ -132,7 +141,14 @@ router.post('/dw', (req, res) => {
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 router.delete('/dw/:id', (req, res) => {
-  db.prepare('DELETE FROM dw WHERE id = ?').run(Number(req.params.id));
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT ext_ref FROM dw WHERE id = ?').get(id);
+  if (row && row.ext_ref) {
+    db.prepare(`INSERT OR IGNORE INTO deleted_ext_refs(ext_ref, table_name, deleted_by)
+                VALUES (?,?,?)`).run(row.ext_ref, 'dw', req.user.id);
+  }
+  db.prepare('DELETE FROM dw WHERE id = ?').run(id);
+  audit(req.user.id, 'delete', 'dw', id);
   res.json({ ok: true });
 });
 
@@ -156,7 +172,14 @@ router.post('/gpay', (req, res) => {
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 router.delete('/gpay/:id', (req, res) => {
-  db.prepare('DELETE FROM gpay WHERE id = ?').run(Number(req.params.id));
+  const id = Number(req.params.id);
+  const row = db.prepare('SELECT ext_ref FROM gpay WHERE id = ?').get(id);
+  if (row && row.ext_ref) {
+    db.prepare(`INSERT OR IGNORE INTO deleted_ext_refs(ext_ref, table_name, deleted_by)
+                VALUES (?,?,?)`).run(row.ext_ref, 'gpay', req.user.id);
+  }
+  db.prepare('DELETE FROM gpay WHERE id = ?').run(id);
+  audit(req.user.id, 'delete', 'gpay', id);
   res.json({ ok: true });
 });
 
