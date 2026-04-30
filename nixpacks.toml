@@ -2,3 +2,9 @@ providers = ["node"]
 
 [variables]
 NIXPACKS_NODE_VERSION = "20"
+
+# Use `npm install` (not `npm ci`) so the lock file is regenerated when
+# package.json changes. Required because we can't run `npm install` locally
+# on Windows without the MSVC toolchain (better-sqlite3 native build).
+[phases.install]
+cmds = ["npm install --no-audit --no-fund"]
