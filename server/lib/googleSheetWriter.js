@@ -112,7 +112,11 @@ function buildBatch(data, tab) {
   // that was deleted today doesn't stay populated from yesterday's push.
   if (data.panels) {
     const panelCap = M.PANEL_LAST_ROW - M.PANEL_FIRST_ROW + 1;
-    M.PANELS.forEach((p, pi) => {
+    // Use full all-branches list (same fix as xlsxWriter) so LASER /
+    // RADHE / TIGEREXCH / 1XCLUB scraped rows actually get pushed to
+    // Google Sheets, not just 1XBET 1-6.
+    const allPanels = M.getBranch('MAIN').panels;
+    allPanels.forEach((p, pi) => {
       const pd = data.panels[p.slug]; if (!pd) return;
       const entries = pd.entries || [];
       const values = entries.slice(0, panelCap).map(e => [

@@ -120,8 +120,14 @@ function writeWorkbook(templatePath, outputPath, data) {
   }
 
   // ── panel entries + summaries ─────────────────────────────────
+  // Use whichever panel list the data was built for. We infer it from the
+  // panels keys (so a B1-only data object writes only 4 panels, MAIN/full
+  // writes all 11). Falls back to MAIN aggregate if data.panels is empty.
   if (data.panels) {
-    M.PANELS.forEach((p, pi) => {
+    const dataSlugs = new Set(Object.keys(data.panels));
+    const allPanels = M.getBranch('MAIN').panels.filter(p => dataSlugs.has(p.slug));
+    const list = allPanels.length ? allPanels : M.getBranch('MAIN').panels;
+    list.forEach((p, pi) => {
       const pd = data.panels[p.slug];
       if (!pd) return;
       const baseCol = p.col;
@@ -218,7 +224,8 @@ function buildDataForDate(db, business_date, branchCode) {
     WHERE business_date = ? AND panel_slug IS NOT NULL ORDER BY id
   `).all(business_date);
   const panels = {};
-  const panelDefs = (branch ? (branch.is_aggregate ? M.getBranch('MAIN').panels : branch.panels) : M.PANELS);
+  // Same default-to-MAIN-aggregate fix as in buildGrid.
+  const panelDefs = (branch && !branch.is_aggregate) ? branch.panels : M.getBranch('MAIN').panels;
   for (const p of panelDefs) panels[p.slug] = { entries: [], totalDeposit: 0, totalWithdrawal: 0 };
   // group by name within panel
   const byPanelName = {};
@@ -347,7 +354,12 @@ function loadTemplateStyles(templatePath) {
 }
 function buildGrid(data, branchCode) {
   const branch = branchCode ? M.getBranch(branchCode) : null;
-  const PANELS = branch ? (branch.is_aggregate ? M.getBranch('MAIN').panels : branch.panels) : M.PANELS;
+  // When no branch is passed (or branch is the MAIN aggregate), use the
+  // full union of all branches' panel slugs. Falling back to legacy
+  // M.PANELS (6-slug 1XBET-only list) caused scraped LASER / RADHE /
+  // TIGEREXCH / 1XCLUB entries to never appear in the Live Sheet because
+  // their slugs weren't in M.PANELS.
+  const PANELS = (branch && !branch.is_aggregate) ? branch.panels : M.getBranch('MAIN').panels;
   const ROWS = Math.max(M.BANK.lastRow, M.PANEL_FIRST_ROW + 60, M.BANK_EXP.lastRow) + 2;
   const COLS = Math.max(...PANELS.map(p => p.col + 3), 14) + 1;
   const grid = Array.from({ length: ROWS }, () => Array(COLS).fill(''));

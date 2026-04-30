@@ -244,6 +244,51 @@ router.post('/reset', A.requireAuth, A.requireAdmin, (req, res) => {
   res.json({ ok: true, date, deleted });
 });
 
+// List dates we have a snapshot for (the "history" dropdown in the UI).
+router.get('/snapshots', A.requireAuth, (req, res) => {
+  const branch = req.query.branch || 'MAIN';
+  const rows = db.prepare(
+    `SELECT business_date, branch, length(html) AS bytes, created_at
+     FROM sheet_snapshots WHERE branch = ?
+     ORDER BY business_date DESC LIMIT 60`
+  ).all(branch);
+  res.json({ ok: true, branch, rows });
+});
+
+// Manually save a snapshot of the CURRENT date's render (admin-only) —
+// useful before a risky import or when you want to lock in a frozen copy
+// without waiting for 05:30 IST rollover.
+router.post('/snapshots/save', A.requireAuth, A.requireAdmin, (req, res) => {
+  const date = (req.body && req.body.date) || currentBusinessDate();
+  const branch = (req.body && req.body.branch) || 'MAIN';
+  const tpl = getTemplatePath(branch);
+  if (!tpl || !fs.existsSync(tpl)) return res.status(400).json({ ok: false, error: 'no template' });
+  try {
+    const data = buildDataForDate(db, date, branch);
+    const g = buildGrid(data, branch);
+    const liveValues = {};
+    for (let r = 0; r < g.grid.length; r++) {
+      for (let c = 0; c < g.grid[r].length; c++) {
+        const v = g.grid[r][c];
+        if (typeof v === 'number' && v !== 0) liveValues[`${r},${c}`] = v;
+        else if (typeof v === 'string' && v !== '' && r > 0) liveValues[`${r},${c}`] = v;
+      }
+    }
+    const ovs = db.prepare('SELECT row, col, value FROM sheet_overrides WHERE business_date = ?').all(date);
+    const overrides = {};
+    for (const o of ovs) overrides[`${o.row},${o.col}`] = o.value;
+    const html = renderTemplateAsHtml(tpl, { liveValues, overrides, editable: false });
+    db.prepare(`INSERT INTO sheet_snapshots(business_date, branch, html, created_at)
+                VALUES (?,?,?,datetime('now'))
+                ON CONFLICT(business_date,branch) DO UPDATE SET
+                  html=excluded.html, created_at=excluded.created_at`).run(date, branch, html);
+    audit(req.user.id, 'snapshot', 'sheet_snapshots', null, { date, branch, bytes: html.length });
+    res.json({ ok: true, date, branch, bytes: html.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // List all manual cell overrides for a given date (so the operator can
 // see exactly which cells were typed in and clear individual ones).
 router.get('/overrides', A.requireAuth, (req, res) => {
@@ -368,6 +413,22 @@ router.get('/html', A.requireAuth, (req, res) => {
   const tpl = getTemplatePath(branch);
   if (!tpl || !fs.existsSync(tpl)) return res.status(400).json({ ok: false, error: 'no template uploaded' });
   try {
+    // Past-date snapshot fallback. If the requested date is BEFORE today's
+    // business date AND there's a saved snapshot, return the snapshot HTML
+    // (frozen, read-only) instead of regenerating from now-empty live tables.
+    // This is what makes "view previous date" actually show data even after
+    // the live rows have been trimmed by the 35-day auto-purge.
+    if (date < currentBusinessDate()) {
+      const snap = db.prepare(
+        'SELECT html, created_at FROM sheet_snapshots WHERE business_date = ? AND branch = ?'
+      ).get(date, branch || 'MAIN');
+      if (snap) {
+        return res.json({
+          ok: true, business_date: date, html: snap.html,
+          snapshot: true, snapshot_at: snap.created_at, editable: false,
+        });
+      }
+    }
     // Cheap stamp combining EVERY data source the renderer reads, so any
     // ingest (panel scrape, bank PDF, GPay statement, manual edit) busts
     // the cache and the user sees the new row on the next /html GET. Was

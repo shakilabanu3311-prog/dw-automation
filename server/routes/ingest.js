@@ -228,7 +228,10 @@ router.get('/panel/map', A.requireAuth, (req, res) => {
   // Also include known sheet panel slugs and recently-seen sources so the UI
   // can render a nice mapper (no free-text typos).
   const M = require('../lib/sheetMap');
-  const sheetSlugs = M.PANELS.map(p => p.slug);
+  // Use the full all-branches slug list for the UI mapper, not the legacy
+  // 6-slug 1XBET-only M.PANELS — otherwise LASER/RADHE/TIGEREXCH/1XCLUB
+  // wouldn't show up as valid map targets.
+  const sheetSlugs = M.allPanelSlugs ? M.allPanelSlugs() : M.PANELS.map(p => p.slug);
   const seen = db.prepare(`SELECT key, value FROM settings WHERE key LIKE 'panel_last_sync:%'`).all()
     .map(r => ({ source: r.key.replace('panel_last_sync:', ''), last_sync: r.value }));
   res.json({ ok: true, map, sheet_slugs: sheetSlugs, recent_sources: seen });

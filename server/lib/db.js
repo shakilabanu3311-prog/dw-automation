@@ -165,6 +165,20 @@ CREATE TABLE IF NOT EXISTS deleted_ext_refs (
   deleted_by INTEGER REFERENCES users(id)
 );
 
+-- Daily sheet snapshots: at every 05:30 IST rollover (and on demand) we
+-- save a frozen HTML render of each branch's Live Sheet for the just-
+-- closed business date. Lets the operator scroll back through past days
+-- even if the live data tables get trimmed. Auto-purge keeps only the
+-- last 35 days so the DB doesn't grow forever.
+CREATE TABLE IF NOT EXISTS sheet_snapshots (
+  business_date TEXT NOT NULL,
+  branch TEXT NOT NULL DEFAULT 'MAIN',
+  html TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (business_date, branch)
+);
+CREATE INDEX IF NOT EXISTS idx_sheet_snapshots_date ON sheet_snapshots(business_date);
+
 -- Manual cell overrides on the live sheet — lets the user type into any
 -- cell in the Live Sheet and have it stick. (row,col) are 0-indexed grid
 -- coordinates; business_date scopes the override to a specific day's sheet.

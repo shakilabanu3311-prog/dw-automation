@@ -21,7 +21,8 @@ function extractParty(narr) {
   if (!narr) return { name: '', utr: '' };
   const s = String(narr).replace(/\s+/g, ' ').trim();
   // UPI/IMPS formats: TYPE:DIR:REF/NAME/BANK  or  TYPE:DIR:REF/NAME/XXNNN/suffix
-  let m = s.match(/^(UPI|IMPS):(REC|PAY|REV):(\d{6,})\/([^\/]+?)(?:\s{2,}|\/|$)/i);
+  // REF can be alphanumeric (some UPI providers prepend a bank/PSP code).
+  let m = s.match(/^(UPI|IMPS):(REC|PAY|REV):([A-Z0-9]{6,})\/([^\/]+?)(?:\s{2,}|\/|$)/i);
   if (m) return { name: m[4].trim().replace(/^MB\s+/i, ''), utr: m[3] };
   m = s.match(/^NEFT[:\/\-]?\s*([A-Z0-9]{6,})?[:\/\-]?\s*([A-Z][A-Z0-9 .&]{2,50})/i);
   if (m) return { name: (m[2] || '').trim(), utr: m[1] || '' };

@@ -34,17 +34,66 @@ async function runRollover(reason = 'scheduled') {
   // Archive a snapshot per branch (uses each branch's own template if uploaded,
   // else falls back to the legacy single template).
   try {
-    const { writeWorkbook, buildDataForDate } = require('./xlsxWriter');
+    const { writeWorkbook, buildDataForDate, buildGrid, renderTemplateAsHtml } = require('./xlsxWriter');
     const codes = ['MAIN', 'B1', 'B2', 'B3'];
     info.archived = {};
+    info.html_snapshots = {};
+    const snapIns = db.prepare(`INSERT INTO sheet_snapshots(business_date, branch, html, created_at)
+                                VALUES (?,?,?,datetime('now'))
+                                ON CONFLICT(business_date,branch) DO UPDATE SET
+                                  html=excluded.html, created_at=excluded.created_at`);
     for (const code of codes) {
       const tpl = getTemplatePath(code);
       if (!tpl || !fs.existsSync(tpl)) continue;
-      const out = path.join(EXPORTS_DIR, `hisab_${closedDate}_${code}.xlsx`);
-      writeWorkbook(tpl, out, buildDataForDate(db, closedDate, code));
-      info.archived[code] = out;
+      // 1) xlsx archive (filesystem; lost on free-tier redeploys)
+      try {
+        const out = path.join(EXPORTS_DIR, `hisab_${closedDate}_${code}.xlsx`);
+        writeWorkbook(tpl, out, buildDataForDate(db, closedDate, code));
+        info.archived[code] = out;
+      } catch (_) {}
+      // 2) HTML snapshot in DB — survives free-tier redeploys (until DB
+      //    itself wipes), and serves "view past day" requests when the
+      //    underlying live tables have been trimmed.
+      try {
+        const data = buildDataForDate(db, closedDate, code);
+        const g = buildGrid(data, code);
+        const liveValues = {};
+        for (let r = 0; r < g.grid.length; r++) {
+          for (let c = 0; c < g.grid[r].length; c++) {
+            const v = g.grid[r][c];
+            if (typeof v === 'number' && v !== 0) liveValues[`${r},${c}`] = v;
+            else if (typeof v === 'string' && v !== '' && r > 0) liveValues[`${r},${c}`] = v;
+          }
+        }
+        const ovs = db.prepare('SELECT row, col, value FROM sheet_overrides WHERE business_date = ?').all(closedDate);
+        const overrides = {};
+        for (const o of ovs) overrides[`${o.row},${o.col}`] = o.value;
+        const html = renderTemplateAsHtml(tpl, { liveValues, overrides, editable: false });
+        snapIns.run(closedDate, code, html);
+        info.html_snapshots[code] = html.length;
+      } catch (e) { info.html_snapshot_error = (info.html_snapshot_error || '') + ` ${code}:${e.message};`; }
     }
   } catch (e) { info.archive_error = String(e.message || e); }
+
+  // Auto-purge snapshots older than 35 days. Keeps "last month" available
+  // even when scrolling back, but caps DB growth.
+  try {
+    const cutoff = (() => {
+      const d = new Date(Date.now() - 35 * 86400 * 1000);
+      return d.toISOString().slice(0, 10);
+    })();
+    const r = db.prepare('DELETE FROM sheet_snapshots WHERE business_date < ?').run(cutoff);
+    info.purged_snapshots = r.changes;
+    // Also trim very old live tables so the DB doesn't grow forever even
+    // if the operator never deletes anything. Same 35-day window.
+    const r2 = db.prepare('DELETE FROM bank_txns WHERE business_date < ?').run(cutoff);
+    const r3 = db.prepare('DELETE FROM dw WHERE business_date < ?').run(cutoff);
+    const r4 = db.prepare('DELETE FROM gpay WHERE business_date < ?').run(cutoff);
+    const r5 = db.prepare('DELETE FROM expenses WHERE business_date < ?').run(cutoff);
+    const r6 = db.prepare('DELETE FROM sheet_overrides WHERE business_date < ?').run(cutoff);
+    info.purged_live = { bank_txns: r2.changes, dw: r3.changes, gpay: r4.changes,
+                         expenses: r5.changes, sheet_overrides: r6.changes };
+  } catch (e) { info.purge_error = String(e.message || e); }
 
   // ── Bank opening-balance carry-forward ──────────────────────────────
   // Today's opening balance = yesterday's closing balance (= yesterday's

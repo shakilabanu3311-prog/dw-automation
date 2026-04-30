@@ -59,7 +59,18 @@ function extractName(narr) {
 
 function extractUtr(narr) {
   if (!narr) return '';
-  const m = String(narr).match(/\b(\d{10,18})\b/);
+  const s = String(narr).toUpperCase();
+  // Prefer a labeled UTR (UTR/Ref/Txn/RRN) — these are unambiguous and
+  // accept alphanumeric values (NEFT/RTGS UTRs commonly start with an
+  // alpha bank code like "AXISN12345678" or "HDFCH012345678").
+  let m = s.match(/\b(?:UTR|REF(?:\s*NO)?|TXN|RRN|TRANSACTION\s*ID)[:\s\-#]*([A-Z0-9]{10,22})/);
+  if (m) return m[1];
+  // No label — accept any 10–18 alphanumeric chunk that has at least one
+  // digit (so we don't grab plain English words). Falls back to digits-only
+  // match for the common UPI/IMPS reference numbers.
+  m = s.match(/\b(?=[A-Z0-9]{10,18}\b)(?=[^\s]*\d)([A-Z0-9]{10,18})\b/);
+  if (m) return m[1];
+  m = s.match(/\b(\d{10,18})\b/);
   return m ? m[1] : '';
 }
 
