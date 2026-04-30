@@ -416,6 +416,17 @@ function buildGrid(data, branchCode) {
         if (Number(e.freeChips))  set(r, p.col + M.PANEL_COL.freeChips, Number(e.freeChips));
         if (Number(e.withdrawal)) set(r, p.col + M.PANEL_COL.withdrawal, Number(e.withdrawal));
       });
+      // Row-3 panel totals — safety fallback. Template has =SUM(O4:O1000)
+      // formulas at row 2 (0-indexed = Excel row 3). HyperFormula recomputes
+      // these against the live values we just wrote — but if HF failed to
+      // install on the deploy host, the formula stays at its stale cached
+      // value (often 0) and the user sees 0 totals despite entries being
+      // visible below. Writing the computed total here as a backup ensures
+      // the totals always show. The next render reloads the template from
+      // disk so the SUM formula is restored, keeping live-edit math intact.
+      const totRow = 2; // Excel row 3 (the totals row)
+      if (Number(pd.totalDeposit))    set(totRow, p.col + M.PANEL_COL.deposit,    Number(pd.totalDeposit));
+      if (Number(pd.totalWithdrawal)) set(totRow, p.col + M.PANEL_COL.withdrawal, Number(pd.totalWithdrawal));
       // Don't write to DW_SUMMARY total/diff cells — the template owns
       // those as formulas (=O3+P3, =Q3, etc.) and HyperFormula recomputes
       // them. Writing here would clobber the formulas with literals and
