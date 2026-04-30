@@ -232,9 +232,40 @@ router.post('/reset', A.requireAuth, A.requireAdmin, (req, res) => {
   const r2 = db.prepare('DELETE FROM dw WHERE business_date = ?').run(date);
   const r3 = db.prepare('DELETE FROM gpay WHERE business_date = ?').run(date);
   const r4 = db.prepare('DELETE FROM expenses WHERE business_date = ?').run(date);
-  const deleted = { bank_txns: r1.changes, dw: r2.changes, gpay: r3.changes, expenses: r4.changes };
+  // Also wipe manual sheet-cell overrides — without this, "Reset this date"
+  // appears to fail because the operator's typed-in cells (5000, etc.)
+  // survive in sheet_overrides and re-show on the next render. Free-chips
+  // entries (separate table) are wiped here too for a true full reset.
+  const r5 = db.prepare('DELETE FROM sheet_overrides WHERE business_date = ?').run(date);
+  const r6 = db.prepare('DELETE FROM free_chips WHERE business_date = ?').run(date);
+  const deleted = { bank_txns: r1.changes, dw: r2.changes, gpay: r3.changes,
+                    expenses: r4.changes, sheet_overrides: r5.changes, free_chips: r6.changes };
   audit(req.user.id, 'reset', 'business_date', null, { date, deleted });
   res.json({ ok: true, date, deleted });
+});
+
+// List all manual cell overrides for a given date (so the operator can
+// see exactly which cells were typed in and clear individual ones).
+router.get('/overrides', A.requireAuth, (req, res) => {
+  const date = req.query.date || currentBusinessDate();
+  const rows = db.prepare(`SELECT row, col, value, updated_at FROM sheet_overrides
+                           WHERE business_date = ? ORDER BY updated_at DESC`).all(date);
+  res.json({ ok: true, business_date: date, rows });
+});
+
+// Clear a single override (or all overrides for the date if no row/col).
+router.post('/overrides/clear', A.requireAuth, (req, res) => {
+  const { date, row, col } = req.body || {};
+  if (!date) return res.status(400).json({ ok: false, error: 'date required' });
+  let info;
+  if (Number.isInteger(row) && Number.isInteger(col)) {
+    info = db.prepare('DELETE FROM sheet_overrides WHERE business_date=? AND row=? AND col=?')
+      .run(date, row, col);
+  } else {
+    info = db.prepare('DELETE FROM sheet_overrides WHERE business_date=?').run(date);
+  }
+  audit(req.user.id, 'clear_overrides', 'sheet_overrides', null, { date, row, col, deleted: info.changes });
+  res.json({ ok: true, deleted: info.changes });
 });
 
 // Inline edit of a single bank's opening balance (admin control).
