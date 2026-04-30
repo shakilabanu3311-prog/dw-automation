@@ -14,8 +14,12 @@ const PANELS = [
 ];
 // Per-panel column offsets from the panel's base col:
 const PANEL_COL = { deposit: 0, freeChips: 1, withdrawal: 2 };
-const PANEL_FIRST_ROW = 2;    // first data row (0-indexed). Extend downward as needed.
-const PANEL_LAST_ROW  = 500;  // soft cap — rewriter will overwrite this range.
+// CRITICAL: row 2 (0-indexed = Excel row 3) holds the panel's "Total" SUM
+// formula like =SUM(O4:O1000). Writers MUST start at row 3 (Excel row 4)
+// or they will overwrite the formula with a literal value, breaking every
+// downstream cell that depends on the per-column sum.
+const PANEL_FIRST_ROW = 3;    // 0-indexed → Excel row 4 (first cell BELOW the SUM total)
+const PANEL_LAST_ROW  = 500;  // 0-indexed → Excel row 501; template sums up to 1000 so plenty of headroom
 
 // Banks block: cols A..H, rows 3..52. One row per bank (Sr starts at 1).
 const BANK = {

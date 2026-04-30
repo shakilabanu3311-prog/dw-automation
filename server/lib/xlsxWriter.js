@@ -140,18 +140,12 @@ function writeWorkbook(templatePath, outputPath, data) {
         if (Number(e.freeChips))  writeCell(ws, r, baseCol + M.PANEL_COL.freeChips,  Number(e.freeChips));
         if (Number(e.withdrawal)) writeCell(ws, r, baseCol + M.PANEL_COL.withdrawal, Number(e.withdrawal));
       }
-      // DW summary row
-      const sRow = M.DW_SUMMARY.firstRow + pi;
-      writeCell(ws, sRow, M.DW_SUMMARY.cols.totalDeposit,    Number(pd.totalDeposit) || 0);
-      writeCell(ws, sRow, M.DW_SUMMARY.cols.totalWithdrawal, Number(pd.totalWithdrawal) || 0);
-      writeCell(ws, sRow, M.DW_SUMMARY.cols.diff,
-        (Number(pd.totalDeposit) || 0) - (Number(pd.totalWithdrawal) || 0));
-      // Chips summary row
-      const cRow = M.CHIPS_SUMMARY.firstRow + pi;
-      writeCell(ws, cRow, M.CHIPS_SUMMARY.cols.openChips,  Number(pd.openChips) || 0);
-      writeCell(ws, cRow, M.CHIPS_SUMMARY.cols.closeChips, Number(pd.closeChips) || 0);
-      writeCell(ws, cRow, M.CHIPS_SUMMARY.cols.diff,
-        (Number(pd.closeChips) || 0) - (Number(pd.openChips) || 0));
+      // DW + Chips summary rows: the TEMPLATE already has formulas like
+      // =O3+P3 / =Q3 in cells K7..M12 (and K17..M22 for chips). Writing
+      // literal numbers here would destroy those formulas. We leave the
+      // formulas in place — HyperFormula recomputes them against the per-
+      // entry cells we just wrote. Only the slug label gets stamped, which
+      // is a static string and not protected by a formula in the template.
     });
   }
 
@@ -404,11 +398,13 @@ function buildGrid(data, branchCode) {
         if (Number(e.freeChips))  set(r, p.col + M.PANEL_COL.freeChips, Number(e.freeChips));
         if (Number(e.withdrawal)) set(r, p.col + M.PANEL_COL.withdrawal, Number(e.withdrawal));
       });
+      // Don't write to DW_SUMMARY total/diff cells — the template owns
+      // those as formulas (=O3+P3, =Q3, etc.) and HyperFormula recomputes
+      // them. Writing here would clobber the formulas with literals and
+      // break "totals update on edit" behaviour. Only the panel slug
+      // label is stamped (the template doesn't have a formula there).
       const sRow = M.DW_SUMMARY.firstRow + pi;
       set(sRow, M.DW_SUMMARY.cols.panel, p.slug);
-      set(sRow, M.DW_SUMMARY.cols.totalDeposit, Number(pd.totalDeposit) || 0);
-      set(sRow, M.DW_SUMMARY.cols.totalWithdrawal, Number(pd.totalWithdrawal) || 0);
-      set(sRow, M.DW_SUMMARY.cols.diff, (Number(pd.totalDeposit) || 0) - (Number(pd.totalWithdrawal) || 0));
     });
   }
 

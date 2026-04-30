@@ -123,16 +123,12 @@ function buildBatch(data, tab) {
         Number(e.deposit) || 0, Number(e.freeChips) || 0, Number(e.withdrawal) || 0,
       ]);
       push(M.PANEL_FIRST_ROW, p.col, padBlanks(values, panelCap, 3));
-      // DW summary
-      push(M.DW_SUMMARY.firstRow + pi, M.DW_SUMMARY.cols.totalDeposit, [[
-        Number(pd.totalDeposit) || 0, Number(pd.totalWithdrawal) || 0,
-        (Number(pd.totalDeposit) || 0) - (Number(pd.totalWithdrawal) || 0),
-      ]]);
-      // Chips summary
-      push(M.CHIPS_SUMMARY.firstRow + pi, M.CHIPS_SUMMARY.cols.openChips, [[
-        Number(pd.openChips) || 0, Number(pd.closeChips) || 0,
-        (Number(pd.closeChips) || 0) - (Number(pd.openChips) || 0),
-      ]]);
+      // CRITICAL: do NOT push to DW_SUMMARY or CHIPS_SUMMARY cells. The
+      // Google Sheet template has formulas there (=O3+P3, =Q3, etc.) and
+      // sheets.values.update would replace them with literal numbers,
+      // permanently destroying the live SUM behaviour. The user's totals
+      // must come from the template's own formulas reading the per-entry
+      // cells we just wrote at PANEL_FIRST_ROW.. PANEL_LAST_ROW.
     });
   }
 
