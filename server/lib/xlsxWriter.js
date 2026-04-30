@@ -221,21 +221,39 @@ function buildDataForDate(db, business_date, branchCode) {
   // Same default-to-MAIN-aggregate fix as in buildGrid.
   const panelDefs = (branch && !branch.is_aggregate) ? branch.panels : M.getBranch('MAIN').panels;
   for (const p of panelDefs) panels[p.slug] = { entries: [], totalDeposit: 0, totalWithdrawal: 0 };
-  // group by name within panel
-  const byPanelName = {};
-  for (const r of dwRows) {
+  // ── Per-row entries (one sheet row per scraped/manual row) ──────────
+  // Earlier this grouped by (panel + name) and produced ONE sheet row per
+  // unique customer name, summing all their deposits + withdrawals into a
+  // single 2234 / 1800 cell. The user wants every individual scrape to
+  // surface as its own row. So we emit one entry per dw row, with deposit
+  // OR withdrawal filled (never both) — the SUM formula at row 3 still
+  // computes the panel total because it sums the whole column.
+  // Deposits sorted first, then withdrawals, so the deposit and
+  // withdrawal columns visually align row-by-row when counts are equal.
+  const sortedDw = dwRows.slice().sort((a, b) => {
+    if (a.panel_slug !== b.panel_slug) return a.panel_slug < b.panel_slug ? -1 : 1;
+    if (a.type !== b.type) return a.type === 'Deposit' ? -1 : 1;
+    return a.id - b.id;
+  });
+  for (const r of sortedDw) {
     if (allowedSlugs && !allowedSlugs.has(r.panel_slug)) continue;
-    const key = r.panel_slug + '|' + (r.name || '');
-    byPanelName[key] = byPanelName[key] || { panel: r.panel_slug, name: r.name, deposit: 0, withdrawal: 0, freeChips: 0 };
-    if (r.type === 'Deposit') byPanelName[key].deposit += r.amt;
-    else if (r.type === 'Withdrawal') byPanelName[key].withdrawal += r.amt;
-  }
-  for (const k of Object.keys(byPanelName)) {
-    const e = byPanelName[k];
-    if (!panels[e.panel]) continue;
-    panels[e.panel].entries.push(e);
-    panels[e.panel].totalDeposit += e.deposit;
-    panels[e.panel].totalWithdrawal += e.withdrawal;
+    if (!panels[r.panel_slug]) continue;
+    const isDep = r.type === 'Deposit';
+    const isWd  = r.type === 'Withdrawal';
+    if (!isDep && !isWd) continue;
+    const entry = {
+      panel: r.panel_slug,
+      name: r.name || '',
+      deposit:    isDep ? Number(r.amt) || 0 : 0,
+      freeChips:  Number(r.chips) || 0,
+      withdrawal: isWd  ? Number(r.amt) || 0 : 0,
+      utr: r.utr || '',
+      ts:  r.ts  || '',
+      id:  r.id,
+    };
+    panels[r.panel_slug].entries.push(entry);
+    if (isDep) panels[r.panel_slug].totalDeposit    += entry.deposit;
+    if (isWd)  panels[r.panel_slug].totalWithdrawal += entry.withdrawal;
   }
 
   // Bank/Exp ledger: bank_charge txns + expenses with category
