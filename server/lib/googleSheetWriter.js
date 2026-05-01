@@ -166,15 +166,57 @@ function buildBatch(data, tab) {
     return rows;
   };
 
-  // ── banks: rows firstRow..lastRow (full 50-row capacity, always) ──
-  {
-    const cap = M.BANK.lastRow - M.BANK.firstRow + 1;
-    const rows = (data.banks || []).slice(0, cap).map((b, i) => [
-      i + 1, b.name || '', b.holder || '',
-      Number(b.open) || 0, Number(b.credit) || 0, '', Number(b.debit) || 0,
-      Number(b.closing) || 0,
-    ]);
-    push(M.BANK.firstRow, 0, padBlanks(rows, cap, 8));
+  // ── banks: per-bank LEDGER blocks (NOT the legacy A..H summary) ──
+  // Each bank with a sheet_slot writes into its own 8-col ledger block at
+  // col `38 + (slot-1)*8`. The A..H summary is auto-populated by the
+  // template's own formulas (=AN1, =AU4, ...) — never written by us.
+  if (Array.isArray(data.banks)) {
+    const L = M.BANK_LEDGER;
+    const txnCap = L.lastTxnRow - L.firstTxnRow + 1;
+    for (const b of data.banks) {
+      if (!b.sheet_slot) continue;
+      const base = M.bankBlockBaseCol(b.sheet_slot);
+      // Totals row (Excel row 3 of the bank's block):
+      //   [Open | Credit_total | "" | Debit_total | Charge_total | "" | Closing_total]
+      // The Credit/Debit/Charge cells must be FORMULAS so live edits in the
+      // txn rows below recompute the totals. Closing references those
+      // totals — also a formula. Open is a literal (carried from yesterday).
+      const colOpen   = colLetter(base + L.cols.open);
+      const colCredit = colLetter(base + L.cols.credit);
+      const colDebit  = colLetter(base + L.cols.debit);
+      const colCharge = colLetter(base + L.cols.charge);
+      const colClose  = colLetter(base + L.cols.closing);
+      // Push the open balance literal separately (RAW)…
+      push(L.totalsRow, base + L.cols.open, [[Number(b.open) || 0]]);
+      // …then the SUM/closing formulas (USER_ENTERED).
+      reqs.push({
+        range: `'${tab}'!${a1(L.totalsRow, base + L.cols.credit)}:${a1(L.totalsRow, base + L.cols.closing)}`,
+        values: [[
+          `=SUM(${colCredit}${L.firstTxnRow + 1}:${colCredit}1000)`,
+          '',
+          `=SUM(${colDebit}${L.firstTxnRow + 1}:${colDebit}1000)`,
+          `=SUM(${colCharge}${L.firstTxnRow + 1}:${colCharge}1000)`,
+          '',
+          `=${colOpen}${L.totalsRow + 1}+${colCredit}${L.totalsRow + 1}-${colDebit}${L.totalsRow + 1}-${colCharge}${L.totalsRow + 1}`,
+        ]],
+        _formulas: true,
+      });
+      // Per-txn rows: 50 of them (deleted txns get blanked out so ghost
+      // rows don't survive). Each txn is one of credit / debit / charge.
+      const txns = (b.txns || []).slice(0, txnCap);
+      const rows = txns.map(t => {
+        const arr = ['', 0, '', 0, 0, '', 0]; // 7 cols: open, credit, crDetails, debit, charge, drDetails, closing
+        const amt = Number(t.amt) || 0;
+        const det = t.detail || '';
+        if (t.category === 'charge') { arr[L.cols.charge] = amt; arr[L.cols.debitDetails] = det; }
+        else if (t.type === 'credit') { arr[L.cols.credit] = amt; arr[L.cols.creditDetails] = det; }
+        else if (t.type === 'debit')  { arr[L.cols.debit]  = amt; arr[L.cols.debitDetails]  = det; }
+        return arr;
+      });
+      // Pad to full 50-row capacity so deleted txns get blanked out.
+      while (rows.length < txnCap) rows.push(['', '', '', '', '', '', '']);
+      push(L.firstTxnRow, base, rows);
+    }
   }
 
   // ── panels: each 3-col block (deposit, freeChips, withdrawal) ──

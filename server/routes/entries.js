@@ -47,10 +47,18 @@ router.post('/banks', (req, res) => {
     const count = db.prepare('SELECT COUNT(*) AS n FROM banks WHERE branch_code = ?').get(bc).n;
     if (count >= 50) return res.status(400).json({ ok: false, error: `Branch ${bc} already has 50 banks (template max). Move some to another branch first.` });
   }
-  const info = db.prepare('INSERT INTO banks(name, holder, acno, open_balance, branch_code) VALUES (?,?,?,?,?)')
-    .run(name, holder || '', acno || '', Number(open_balance) || 0, bc || null);
-  audit(req.user.id, 'create', 'bank', info.lastInsertRowid, { name, branch_code: bc });
-  res.json({ ok: true, id: info.lastInsertRowid });
+  // Auto-assign the lowest free sheet_slot (1..50) so the bank lands in
+  // its own per-bank ledger block in the master template. Without this,
+  // sheet_slot stays NULL and the writer wouldn't know where to put the
+  // txns — they'd end up in slot 0/wrong block.
+  const used = new Set(db.prepare('SELECT sheet_slot FROM banks WHERE sheet_slot IS NOT NULL').all().map(r => r.sheet_slot));
+  let slot = null;
+  for (let i = 1; i <= 50; i++) if (!used.has(i)) { slot = i; break; }
+  if (!slot) return res.status(400).json({ ok: false, error: 'All 50 bank slots in the sheet are full. Delete a bank first.' });
+  const info = db.prepare('INSERT INTO banks(name, holder, acno, open_balance, branch_code, sheet_slot) VALUES (?,?,?,?,?,?)')
+    .run(name, holder || '', acno || '', Number(open_balance) || 0, bc || null, slot);
+  audit(req.user.id, 'create', 'bank', info.lastInsertRowid, { name, branch_code: bc, sheet_slot: slot });
+  res.json({ ok: true, id: info.lastInsertRowid, sheet_slot: slot });
 });
 router.patch('/banks/:id', (req, res) => {
   const id = Number(req.params.id);

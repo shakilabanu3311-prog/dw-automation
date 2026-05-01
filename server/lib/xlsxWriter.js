@@ -103,19 +103,45 @@ function writeWorkbook(templatePath, outputPath, data) {
   const wb = XLSX.readFile(templatePath, { cellStyles: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
 
-  // ── banks ──────────────────────────────────────────────────────
+  // ── banks (per-bank ledger blocks) ─────────────────────────────
+  // Each bank with a sheet_slot writes into its own 8-col ledger block at
+  // col `38 + (slot-1)*8`. The legacy A..H summary block is auto-populated
+  // by the template's own formulas (=AN1, =AU4, etc.) — DO NOT write to it.
   if (Array.isArray(data.banks)) {
-    for (let i = 0; i < data.banks.length; i++) {
-      const r = M.BANK.firstRow + i;
-      if (r > M.BANK.lastRow) break;
-      const b = data.banks[i];
-      writeCell(ws, r, M.BANK.cols.sr,     i + 1);
-      writeCell(ws, r, M.BANK.cols.name,   b.name);
-      writeCell(ws, r, M.BANK.cols.holder, b.holder);
-      writeCell(ws, r, M.BANK.cols.open,   Number(b.open) || 0);
-      writeCell(ws, r, M.BANK.cols.credit, Number(b.credit) || 0);
-      writeCell(ws, r, M.BANK.cols.debit,  Number(b.debit) || 0);
-      writeCell(ws, r, M.BANK.cols.closing, Number(b.closing) || 0);
+    const L = M.BANK_LEDGER;
+    for (const b of data.banks) {
+      if (!b.sheet_slot) continue;          // unslotted bank → skip silently
+      const base = M.bankBlockBaseCol(b.sheet_slot);
+      // Open Bank Balance at the totals row (carries forward yesterday's closing).
+      writeCell(ws, L.totalsRow, base + L.cols.open, Number(b.open) || 0);
+      // One sheet row per txn. Credits go in (+1, +2); debits in (+3, +5);
+      // charges in (+4, +5). The template's per-row Closing formula (col +6)
+      // recomputes automatically via HyperFormula on the next render.
+      const txns = (b.txns || []).slice(0, L.lastTxnRow - L.firstTxnRow + 1);
+      for (let i = 0; i < txns.length; i++) {
+        const r = L.firstTxnRow + i;
+        const t = txns[i];
+        const amt = Number(t.amt) || 0;
+        const detail = t.detail || '';
+        if (t.category === 'charge') {
+          writeCell(ws, r, base + L.cols.charge, amt);
+          writeCell(ws, r, base + L.cols.debitDetails, detail);
+        } else if (t.type === 'credit') {
+          writeCell(ws, r, base + L.cols.credit, amt);
+          writeCell(ws, r, base + L.cols.creditDetails, detail);
+        } else if (t.type === 'debit') {
+          writeCell(ws, r, base + L.cols.debit, amt);
+          writeCell(ws, r, base + L.cols.debitDetails, detail);
+        }
+      }
+      // Safety fallback for the totals row's SUM formulas — same trick we
+      // use for panel totals. If HyperFormula fails to load, the cached
+      // SUM result stays at 0; writing the literal totals here keeps the
+      // sheet usable. The template SUM formulas re-establish on next render.
+      if (b.credit) writeCell(ws, L.totalsRow, base + L.cols.credit, Number(b.credit) || 0);
+      if (b.debit)  writeCell(ws, L.totalsRow, base + L.cols.debit,  Number(b.debit)  || 0);
+      if (b.charge) writeCell(ws, L.totalsRow, base + L.cols.charge, Number(b.charge) || 0);
+      if (b.closing != null) writeCell(ws, L.totalsRow, base + L.cols.closing, Number(b.closing) || 0);
     }
   }
 
@@ -186,30 +212,48 @@ function buildDataForDate(db, business_date, branchCode) {
   const restrictPanels = branch && !branch.is_aggregate;
   const allowedSlugs = restrictPanels ? new Set(branch.panels.map(p => p.slug)) : null;
 
+  // Pull banks (now also includes sheet_slot — required for per-bank ledger
+  // block writes). For branch sheets, restrict to that branch's banks; for
+  // MAIN, take all 50.
   const bankSql = restrictPanels
-    ? 'SELECT id, name, holder, open_balance AS open FROM banks WHERE branch_code = ? ORDER BY id LIMIT 50'
-    : 'SELECT id, name, holder, open_balance AS open FROM banks ORDER BY id LIMIT 50';
+    ? 'SELECT id, name, holder, open_balance AS open, sheet_slot FROM banks WHERE branch_code = ? ORDER BY sheet_slot, id LIMIT 50'
+    : 'SELECT id, name, holder, open_balance AS open, sheet_slot FROM banks ORDER BY sheet_slot, id LIMIT 50';
   const banks = restrictPanels
     ? db.prepare(bankSql).all(branch.code)
     : db.prepare(bankSql).all();
-  // Aggregate credit/debit per bank_id for the date. Bank charges are kept out
-  // of the per-bank credit/debit totals here — they flow into the Bank & Exp ledger.
-  const txns = db.prepare(`
-    SELECT bank_id, type, SUM(amt) AS total
+
+  // Pull every bank txn for the date (not just aggregates) so we can emit
+  // per-bank rows into each bank's ledger block. Charges stay in the same
+  // table — they're written into the "D Bank Chg" column of the txn row.
+  const allTxns = db.prepare(`
+    SELECT id, bank_id, type, amt, detail, category, ts
     FROM bank_txns
-    WHERE business_date = ? AND (category IS NULL OR category != 'charge')
-    GROUP BY bank_id, type
+    WHERE business_date = ?
+    ORDER BY id
   `).all(business_date);
-  const byBank = {};
-  for (const t of txns) {
+
+  // Build per-bank row data for the ledger block writer:
+  //   { bankRow, txns: [{type, amt, detail, category}], totals: {credit, debit, charge} }
+  // Each row in `txns` ends up as one row in the bank's ledger block.
+  const txnsByBank = {};
+  for (const t of allTxns) {
     const k = t.bank_id || 0;
-    byBank[k] = byBank[k] || { credit: 0, debit: 0 };
-    if (t.type === 'credit') byBank[k].credit = t.total;
-    else byBank[k].debit = t.total;
+    (txnsByBank[k] = txnsByBank[k] || []).push(t);
   }
   const bankRows = banks.map(b => {
-    const tx = byBank[b.id] || { credit: 0, debit: 0 };
-    return { ...b, credit: tx.credit, debit: tx.debit, closing: (b.open || 0) + tx.credit - tx.debit };
+    const list = txnsByBank[b.id] || [];
+    let credit = 0, debit = 0, charge = 0;
+    for (const t of list) {
+      if (t.category === 'charge') charge += Number(t.amt) || 0;
+      else if (t.type === 'credit') credit += Number(t.amt) || 0;
+      else if (t.type === 'debit')  debit  += Number(t.amt) || 0;
+    }
+    return {
+      ...b,
+      credit, debit, charge,
+      closing: (Number(b.open) || 0) + credit - debit - charge,
+      txns: list,
+    };
   });
 
   // Panels — aggregate dw rows per panel_slug
@@ -401,7 +445,11 @@ function buildGrid(data, branchCode) {
   // their slugs weren't in M.PANELS.
   const PANELS = (branch && !branch.is_aggregate) ? branch.panels : M.getBranch('MAIN').panels;
   const ROWS = Math.max(M.BANK.lastRow, M.PANEL_FIRST_ROW + 60, M.BANK_EXP.lastRow) + 2;
-  const COLS = Math.max(...PANELS.map(p => p.col + 3), 14) + 1;
+  // Widen COLS to cover the per-bank ledger blocks. Each bank slot uses 8
+  // cols starting at firstSlotCol. We size for ALL 50 slots so any bank
+  // (no matter where its slot lands) has cells to write into.
+  const lastBankCol = M.BANK_LEDGER.firstSlotCol + M.BANK_LEDGER.maxSlots * M.BANK_LEDGER.blockWidth;
+  const COLS = Math.max(...PANELS.map(p => p.col + 3), 14, lastBankCol) + 1;
   const grid = Array.from({ length: ROWS }, () => Array(COLS).fill(''));
   const set = (r, c, v) => { if (v === undefined || v === null || v === '') return; grid[r][c] = v; };
 
@@ -420,17 +468,33 @@ function buildGrid(data, branchCode) {
     set(0, p.col + M.PANEL_COL.withdrawal, p.slug + ' WDL');
   });
 
-  // Banks
-  (data.banks || []).forEach((b, i) => {
-    const r = M.BANK.firstRow + i;
-    if (r > M.BANK.lastRow) return;
-    set(r, M.BANK.cols.sr, i + 1);
-    set(r, M.BANK.cols.name, b.name || '');
-    set(r, M.BANK.cols.holder, b.holder || '');
-    set(r, M.BANK.cols.open, Number(b.open) || 0);
-    set(r, M.BANK.cols.credit, Number(b.credit) || 0);
-    set(r, M.BANK.cols.debit, Number(b.debit) || 0);
-    set(r, M.BANK.cols.closing, Number(b.closing) || 0);
+  // Banks (per-bank ledger blocks)
+  const L = M.BANK_LEDGER;
+  (data.banks || []).forEach((b) => {
+    if (!b.sheet_slot) return;
+    const base = M.bankBlockBaseCol(b.sheet_slot);
+    set(L.totalsRow, base + L.cols.open, Number(b.open) || 0);
+    if (b.credit) set(L.totalsRow, base + L.cols.credit, Number(b.credit) || 0);
+    if (b.debit)  set(L.totalsRow, base + L.cols.debit,  Number(b.debit)  || 0);
+    if (b.charge) set(L.totalsRow, base + L.cols.charge, Number(b.charge) || 0);
+    if (b.closing != null) set(L.totalsRow, base + L.cols.closing, Number(b.closing) || 0);
+    const txns = (b.txns || []).slice(0, L.lastTxnRow - L.firstTxnRow + 1);
+    for (let i = 0; i < txns.length; i++) {
+      const r = L.firstTxnRow + i;
+      const t = txns[i];
+      const amt = Number(t.amt) || 0;
+      const detail = t.detail || '';
+      if (t.category === 'charge') {
+        set(r, base + L.cols.charge, amt);
+        set(r, base + L.cols.debitDetails, detail);
+      } else if (t.type === 'credit') {
+        set(r, base + L.cols.credit, amt);
+        set(r, base + L.cols.creditDetails, detail);
+      } else if (t.type === 'debit') {
+        set(r, base + L.cols.debit, amt);
+        set(r, base + L.cols.debitDetails, detail);
+      }
+    }
   });
 
   // Panel entries + summaries

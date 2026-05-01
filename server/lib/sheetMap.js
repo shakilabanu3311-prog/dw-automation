@@ -21,11 +21,43 @@ const PANEL_COL = { deposit: 0, freeChips: 1, withdrawal: 2 };
 const PANEL_FIRST_ROW = 3;    // 0-indexed → Excel row 4 (first cell BELOW the SUM total)
 const PANEL_LAST_ROW  = 500;  // 0-indexed → Excel row 501; template sums up to 1000 so plenty of headroom
 
-// Banks block: cols A..H, rows 3..52. One row per bank (Sr starts at 1).
+// Banks block: cols A..H is a SUMMARY MIRROR. The actual per-bank ledger
+// blocks live at cols AM(38) onward — see BANK_LEDGER below. The A..H
+// cells pull values from each bank's slot via formulas like `=AN1`
+// (slot 1's name), `=AU4` (slot 2's open) etc., so writing into the
+// per-bank slot makes A..H update automatically.
+//
+// Kept here only for legacy code paths; writers should NOT touch it.
 const BANK = {
   firstRow: 3, lastRow: 52,
   cols: { sr: 0, name: 1, holder: 2, open: 3, credit: 4, debit: 6, closing: 7 },
 };
+
+// Per-bank LEDGER blocks. Each bank gets its own 8-col block. Bank slot N
+// (1-indexed) starts at col `firstSlotCol + (N-1) * blockWidth`.
+//   slot 1 → col 38 (AM)   slot 2 → col 46 (AU)   slot 3 → col 54 (BC)
+//   ... up to slot 50 → col 430 (PO).
+// Column offsets within each block:
+//   +0 Open Bank Balance   (literal at totals row; running formula on txn rows)
+//   +1 Cradit Amt          (per-txn credit; SUM at totals row)
+//   +2 Cr Details          (per-txn credit detail)
+//   +3 Dabit Amt           (per-txn debit;  SUM at totals row)
+//   +4 D Bank Chg          (per-txn charge; SUM at totals row)
+//   +5 Dr Details          (per-txn debit/charge detail)
+//   +6 Closing Bank Balance (formula = open + credit − debit − charge)
+//   +7 (gap before next bank)
+const BANK_LEDGER = {
+  firstSlotCol: 38,
+  blockWidth: 8,
+  maxSlots: 50,
+  totalsRow: 2,    // 0-indexed → Excel row 3
+  firstTxnRow: 3,  // 0-indexed → Excel row 4
+  lastTxnRow: 52,  // 0-indexed → Excel row 53 (50 rows of txns)
+  cols: { open: 0, credit: 1, creditDetails: 2, debit: 3, charge: 4, debitDetails: 5, closing: 6 },
+};
+function bankBlockBaseCol(slot) {
+  return BANK_LEDGER.firstSlotCol + (Number(slot) - 1) * BANK_LEDGER.blockWidth;
+}
 
 // DW summary (panel totals) — rows 6..11 (one per panel), cols J..M.
 const DW_SUMMARY = {
@@ -122,6 +154,7 @@ function allPanelSlugs() {
 
 module.exports = {
   PANELS, PANEL_COL, PANEL_FIRST_ROW, PANEL_LAST_ROW,
-  BANK, DW_SUMMARY, CHIPS_SUMMARY, BANK_EXP, PARKING, CATEGORIES,
+  BANK, BANK_LEDGER, bankBlockBaseCol,
+  DW_SUMMARY, CHIPS_SUMMARY, BANK_EXP, PARKING, CATEGORIES,
   BRANCHES, getBranch, allPanelSlugs, panelsAt,
 };

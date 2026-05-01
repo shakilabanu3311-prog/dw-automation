@@ -226,6 +226,31 @@ ensureColumn('bank_txns', 'branch_code', 'TEXT');
 ensureColumn('dw', 'branch_code', 'TEXT');
 ensureColumn('gpay', 'branch_code', 'TEXT');
 ensureColumn('expenses', 'branch_code', 'TEXT');
+// Per-bank sheet slot (1..50). Determines which 8-col ledger block in the
+// master template the bank's txns are written into. Auto-assigned on
+// insert if NULL (lowest free slot).
+ensureColumn('banks', 'sheet_slot', 'INTEGER');
+// Back-fill: if any banks were created BEFORE the sheet_slot column
+// existed, hand them out slots in id order. Without this, every existing
+// bank has sheet_slot=NULL and the per-bank writer has nowhere to put
+// their txns — which is exactly the "Karnataka entries don't appear"
+// bug. Runs once per startup; idempotent (skips banks that already
+// have a slot, only fills the gaps).
+try {
+  const unslotted = db.prepare('SELECT id FROM banks WHERE sheet_slot IS NULL ORDER BY id').all();
+  if (unslotted.length) {
+    const used = new Set(db.prepare('SELECT sheet_slot FROM banks WHERE sheet_slot IS NOT NULL').all().map(r => r.sheet_slot));
+    const upd = db.prepare('UPDATE banks SET sheet_slot = ? WHERE id = ?');
+    for (const b of unslotted) {
+      let slot = null;
+      for (let i = 1; i <= 50; i++) if (!used.has(i)) { slot = i; break; }
+      if (!slot) break; // sheet only has 50 slots; later banks stay null
+      upd.run(slot, b.id);
+      used.add(slot);
+    }
+    console.log('[db] back-filled sheet_slot for', unslotted.length, 'existing banks');
+  }
+} catch (e) { console.warn('[db] sheet_slot back-fill failed:', e.message); }
 
 // ── Adapter to give better-sqlite3–like API on top of node:sqlite ──
 function coerce(v) {
