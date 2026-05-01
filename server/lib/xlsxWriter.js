@@ -270,16 +270,30 @@ function buildDataForDate(db, business_date, branchCode) {
     }
   }
 
-  // Bank/Exp ledger: bank_charge txns + expenses with category
+  // Bank/Exp ledger: bank_charge txns + expenses with category.
+  // LEFT JOIN banks so the BANK CHG label tells the operator which bank
+  // the charge came from — earlier every charge said "BANK CHG" with no
+  // hint, so 5 charges from 5 different banks looked identical.
   const charges = db.prepare(`
-    SELECT amt, detail FROM bank_txns
-    WHERE business_date = ? AND category = 'charge'
+    SELECT t.amt, t.detail, b.name AS bank_name
+    FROM bank_txns t LEFT JOIN banks b ON b.id = t.bank_id
+    WHERE t.business_date = ? AND t.category = 'charge'
+    ORDER BY t.id
   `).all(business_date);
   const exps = db.prepare(`
     SELECT amt, category, remark, employee FROM expenses WHERE business_date = ?
   `).all(business_date);
   const bankExp = [];
-  for (const c of charges) bankExp.push({ debit: c.amt, debitDetails: 'BANK CHG' });
+  for (const c of charges) {
+    let label = 'BANK CHG';
+    if (c.bank_name) label += ' - ' + c.bank_name;
+    // Slim the narration down to a useful tail (often "GST 18% / SMS CHG / ...")
+    if (c.detail) {
+      const tail = String(c.detail).replace(/\s+/g, ' ').slice(0, 40).trim();
+      if (tail) label += ' (' + tail + ')';
+    }
+    bankExp.push({ debit: c.amt, debitDetails: label });
+  }
   for (const e of exps) {
     const cat = M.CATEGORIES[e.category];
     if (!cat || cat.block !== 'BANK_EXP') continue;

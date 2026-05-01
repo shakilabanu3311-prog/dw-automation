@@ -27,7 +27,11 @@ const BANK_SIGNATURES = [
 
 const CREDIT_WORDS = /\b(credited|deposited|received|credit|cr\b|cr\.)/i;
 const DEBIT_WORDS  = /\b(debited|withdrawn|paid|spent|debit|dr\b|dr\.|txn\s+of|purchase|sent)/i;
-const CHARGE_WORDS = /\b(charge|chg|fee|gst|cgst|sgst|penalty|levied)\b/i;
+// Widened to match the PDF-parser coverage so SMS-side detection doesn't
+// miss charges that the PDF parser would catch (and vice versa). Keeps
+// SMS-derived bank_txns rows landing in the BANK_EXP ledger ("BANK CHG ...")
+// section of the sheet instead of the bank's plain debit column.
+const CHARGE_WORDS = /\b(charges?|chg|chgs|chrg|fee|fees|gst|cgst|sgst|igst|penalty|fine|levy|levied|commission|comm|tds|min[\s\-]*bal|mab|amb|nmc|sms\s*charg|service\s*charg|serv\s*tax|maint(?:enance)?\s*chg|annual\s*fee|maintenance)\b/i;
 const BAL_RE       = /\b(?:bal|balance|avl\s*bal|a\/c\s*bal)[^0-9]{0,8}(?:inr|rs\.?)?\s*([0-9,]+\.?\d*)/i;
 const AMT_RE       = /\b(?:inr|rs\.?|₹)\s*([0-9,]+\.?\d*)|\b([0-9,]+\.?\d*)\s*(?:inr|rs)\b/i;
 const UTR_RE       = /\b(?:UTR[:\s-]*|Ref[:\s-]+(?:No[:\s-]*)?|Txn[:\s#-]+|RRN[:\s-]*)([A-Z0-9]{10,22})/i;
