@@ -76,6 +76,76 @@ function colLetter(c) {
 function a1(r, c) { return `${colLetter(c)}${r + 1}`; }
 function rangeA1(r1, c1, r2, c2) { return `${a1(r1, c1)}:${a1(r2, c2)}`; }
 
+// Convert business_date (YYYY-MM-DD) to a tab name in DD-MM-YYYY.
+// Matches the user's manual convention (their existing tab was 30/04/2026)
+// but uses dashes to avoid '/' edge cases in Sheets API range parsing.
+function dateTabName(business_date) {
+  const m = String(business_date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return business_date;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+// Ensure a tab named `tabName` exists. If missing, duplicates `templateTab`
+// (the canonical DEMO sheet) so the new date inherits all formulas, formats,
+// merges, column widths, and headers — exactly like the user manually doing
+// "Duplicate sheet" → rename to today's date.
+//
+// Returns: the resolved tabName (may differ if templateTab is missing).
+async function ensureDateTab(svc, sheetId, tabName, templateTab) {
+  const meta = await svc.spreadsheets.get({ spreadsheetId: sheetId, fields: 'sheets(properties(sheetId,title))' });
+  const sheets = meta.data.sheets || [];
+  const existing = sheets.find(s => s.properties.title === tabName);
+  if (existing) return tabName;
+  const tpl = sheets.find(s => s.properties.title === templateTab);
+  if (!tpl) {
+    // No template tab to clone — fall back to writing into the first sheet.
+    return sheets[0]?.properties?.title || tabName;
+  }
+  // Insert the duplicate at index 0 so the newest day is the leftmost tab
+  // (matches how the user reads the workbook: most-recent-first).
+  await svc.spreadsheets.batchUpdate({
+    spreadsheetId: sheetId,
+    requestBody: {
+      requests: [{
+        duplicateSheet: {
+          sourceSheetId: tpl.properties.sheetId,
+          insertSheetIndex: 0,
+          newSheetName: tabName,
+        },
+      }],
+    },
+  });
+  return tabName;
+}
+
+// Auto-purge tabs older than 35 days. Looks for tabs named DD-MM-YYYY,
+// parses them, deletes any whose date is more than 35 days behind today.
+// The template tab (DEMO) is always preserved regardless of name.
+async function purgeOldDateTabs(svc, sheetId, templateTab, maxAgeDays = 35) {
+  try {
+    const meta = await svc.spreadsheets.get({ spreadsheetId: sheetId, fields: 'sheets(properties(sheetId,title))' });
+    const cutoff = Date.now() - maxAgeDays * 86400 * 1000;
+    const toDelete = [];
+    for (const s of (meta.data.sheets || [])) {
+      const title = s.properties.title;
+      if (title === templateTab) continue;
+      const m = title.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (!m) continue;
+      const t = Date.parse(`${m[3]}-${m[2]}-${m[1]}T00:00:00Z`);
+      if (Number.isFinite(t) && t < cutoff) toDelete.push(s.properties.sheetId);
+    }
+    if (!toDelete.length) return 0;
+    await svc.spreadsheets.batchUpdate({
+      spreadsheetId: sheetId,
+      requestBody: { requests: toDelete.map(id => ({ deleteSheet: { sheetId: id } })) },
+    });
+    return toDelete.length;
+  } catch (e) {
+    console.warn('[gsync] purgeOldDateTabs failed:', e.message);
+    return 0;
+  }
+}
+
 // Build a single `values.batchUpdate` payload from the sheetMap-structured data.
 //
 // IMPORTANT: every block ALWAYS rewrites its full row capacity. If today
@@ -169,7 +239,18 @@ async function pushBranchToGoogleSheet(db, business_date, branchCode) {
   if (!sheetId) return null;
   const svc = await sheetsClient();
   const data = buildDataForDate(db, business_date, branchCode);
-  const reqs = buildBatch(data, cfg.tab);
+  // Each business_date writes to its OWN tab (DD-MM-YYYY), cloned on first
+  // touch from the canonical template tab (DEMO). This way the 05:30 IST
+  // rollover automatically gets a fresh, formatted page — same as the user
+  // manually duplicating DEMO and renaming to today's date.
+  const dateTab = dateTabName(business_date);
+  let activeTab = cfg.tab;
+  try {
+    activeTab = await ensureDateTab(svc, sheetId, dateTab, cfg.tab);
+  } catch (e) {
+    console.warn('[gsync] ensureDateTab failed, falling back to', cfg.tab, ':', e.message);
+  }
+  const reqs = buildBatch(data, activeTab);
   if (!reqs.length) return { branch: branchCode, sheetId, updated: 0 };
   // Split into two batches so formulas survive: RAW for literal values
   // (numbers stay numbers, no auto-parsing), USER_ENTERED for the
@@ -197,7 +278,7 @@ async function pushBranchToGoogleSheet(db, business_date, branchCode) {
     branch: branchCode,
     updated: resp.data.totalUpdatedCells || 0,
     ranges: reqs.length,
-    sheetId, tab: cfg.tab,
+    sheetId, tab: activeTab, templateTab: cfg.tab,
     url: `https://docs.google.com/spreadsheets/d/${sheetId}`,
   };
 }
@@ -256,4 +337,8 @@ function scheduleLiveSync(business_date) {
   } catch (_) {}
 }
 
-module.exports = { pushToGoogleSheet, pushBranchToGoogleSheet, buildBatch, a1, rangeA1, loadGoogleConfig, scheduleLiveSync };
+module.exports = {
+  pushToGoogleSheet, pushBranchToGoogleSheet, buildBatch, a1, rangeA1,
+  loadGoogleConfig, scheduleLiveSync, sheetsClient,
+  ensureDateTab, purgeOldDateTabs, dateTabName,
+};

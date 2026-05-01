@@ -214,7 +214,7 @@ function buildDataForDate(db, business_date, branchCode) {
 
   // Panels — aggregate dw rows per panel_slug
   const dwRows = db.prepare(`
-    SELECT panel_slug, type, name, amt FROM dw
+    SELECT id, panel_slug, type, name, amt, chips, utr, ts FROM dw
     WHERE business_date = ? AND panel_slug IS NOT NULL ORDER BY id
   `).all(business_date);
   const panels = {};
@@ -222,38 +222,52 @@ function buildDataForDate(db, business_date, branchCode) {
   const panelDefs = (branch && !branch.is_aggregate) ? branch.panels : M.getBranch('MAIN').panels;
   for (const p of panelDefs) panels[p.slug] = { entries: [], totalDeposit: 0, totalWithdrawal: 0 };
   // ── Per-row entries (one sheet row per scraped/manual row) ──────────
-  // Earlier this grouped by (panel + name) and produced ONE sheet row per
-  // unique customer name, summing all their deposits + withdrawals into a
-  // single 2234 / 1800 cell. The user wants every individual scrape to
-  // surface as its own row. So we emit one entry per dw row, with deposit
-  // OR withdrawal filled (never both) — the SUM formula at row 3 still
-  // computes the panel total because it sums the whole column.
-  // Deposits sorted first, then withdrawals, so the deposit and
-  // withdrawal columns visually align row-by-row when counts are equal.
-  const sortedDw = dwRows.slice().sort((a, b) => {
-    if (a.panel_slug !== b.panel_slug) return a.panel_slug < b.panel_slug ? -1 : 1;
-    if (a.type !== b.type) return a.type === 'Deposit' ? -1 : 1;
-    return a.id - b.id;
-  });
-  for (const r of sortedDw) {
+  // We emit one entry per dw row, but PAIR deposits & withdrawals on the
+  // SAME visual row when both columns can be populated. Earlier the writer
+  // sorted Deposit-first then Withdrawal, so 4 deps + 3 wds rendered as:
+  //   row4: dep0  -    -    | row5: dep1  -    -    | row6: dep2  -    -
+  //   row7: dep3  -    -    | row8: -     -   wd0   | row9: -    -   wd1
+  // — which the user calls "not line by line". The fix: for each panel,
+  // bucket deps and wds separately, then zip them — row N = depN + wdN
+  // (with the longer list trailing into rows where the other side is blank).
+  // The SUM formula at row 3 still computes the panel total because it
+  // sums the whole column (= same total as before).
+  const dwByPanel = {};
+  for (const r of dwRows) {
     if (allowedSlugs && !allowedSlugs.has(r.panel_slug)) continue;
     if (!panels[r.panel_slug]) continue;
     const isDep = r.type === 'Deposit';
     const isWd  = r.type === 'Withdrawal';
     if (!isDep && !isWd) continue;
-    const entry = {
-      panel: r.panel_slug,
-      name: r.name || '',
-      deposit:    isDep ? Number(r.amt) || 0 : 0,
-      freeChips:  Number(r.chips) || 0,
-      withdrawal: isWd  ? Number(r.amt) || 0 : 0,
-      utr: r.utr || '',
-      ts:  r.ts  || '',
-      id:  r.id,
-    };
-    panels[r.panel_slug].entries.push(entry);
-    if (isDep) panels[r.panel_slug].totalDeposit    += entry.deposit;
-    if (isWd)  panels[r.panel_slug].totalWithdrawal += entry.withdrawal;
+    const bucket = (dwByPanel[r.panel_slug] = dwByPanel[r.panel_slug] || { deps: [], wds: [] });
+    (isDep ? bucket.deps : bucket.wds).push(r);
+  }
+  for (const slug of Object.keys(dwByPanel)) {
+    const { deps, wds } = dwByPanel[slug];
+    const len = Math.max(deps.length, wds.length);
+    for (let i = 0; i < len; i++) {
+      const d = deps[i];
+      const w = wds[i];
+      // Pick a primary row for name/utr/chips fields. Prefer deposit if both
+      // exist on this paired line — otherwise the side that has a value.
+      const primary = d || w;
+      const depAmt  = d ? Number(d.amt) || 0 : 0;
+      const wdAmt   = w ? Number(w.amt) || 0 : 0;
+      const chips   = (d && Number(d.chips) ? Number(d.chips) : (w && Number(w.chips) ? Number(w.chips) : 0));
+      const entry = {
+        panel: slug,
+        name: primary.name || '',
+        deposit:    depAmt,
+        freeChips:  chips,
+        withdrawal: wdAmt,
+        utr: primary.utr || '',
+        ts:  primary.ts  || '',
+        id:  primary.id,
+      };
+      panels[slug].entries.push(entry);
+      panels[slug].totalDeposit    += depAmt;
+      panels[slug].totalWithdrawal += wdAmt;
+    }
   }
 
   // Bank/Exp ledger: bank_charge txns + expenses with category

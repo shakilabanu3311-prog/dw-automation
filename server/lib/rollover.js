@@ -130,9 +130,28 @@ async function runRollover(reason = 'scheduled') {
     const haveCfg = (process.env.GOOGLE_SHEET_ID || cfg.sheetId)
                   && (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || cfg.saJson);
     if (haveCfg) {
-      const { pushToGoogleSheet } = require('./googleSheetWriter');
+      const { pushToGoogleSheet, purgeOldDateTabs, sheetsClient, loadGoogleConfig } =
+        require('./googleSheetWriter');
+      // 1) Push the just-closed date one final time (final snapshot of yesterday).
       const gs = await pushToGoogleSheet(db, closedDate);
       info.google = gs;
+      // 2) Push the NEW business_date (mostly zeros) so its tab is born at
+      //    05:30 sharp — matches "every day at 5:30 we write a new date".
+      try {
+        const gs2 = await pushToGoogleSheet(db, newDate);
+        info.google_new_date = gs2;
+      } catch (e) { info.google_new_date_error = String(e.message || e); }
+      // 3) Auto-purge tabs older than 35 days from each branch sheet.
+      try {
+        const cfg2 = loadGoogleConfig();
+        const svc = await sheetsClient();
+        const purged = {};
+        for (const [code, id] of Object.entries(cfg2.branchSheets || {})) {
+          if (!id) continue;
+          purged[code] = await purgeOldDateTabs(svc, id, cfg2.tab, 35);
+        }
+        info.google_purged = purged;
+      } catch (e) { info.google_purge_error = String(e.message || e); }
     }
   } catch (e) { info.google_error = String(e.message || e); }
 
