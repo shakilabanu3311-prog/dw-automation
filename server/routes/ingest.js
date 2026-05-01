@@ -304,9 +304,31 @@ router.get('/panel/status', A.requireAuth, (req, res) => {
 // ── SMS / NOTIFICATION INGEST (Android app) ───────────────────
 // Accepts: { messages: [{ sender, body, ts, source?: 'sms'|'notif' }, ...] }
 // Auth: bearer token (same as panel extension).
+//
+// Designed to NEVER 5xx on bad input. The Android app shows the raw
+// response body to the user — opaque crashes are useless. Instead we:
+//   • catch parse errors per-message (don't fail the whole batch),
+//   • catch insert errors per-message and bucket into `errors[]`,
+//   • return 200 with detailed counts + first few error reasons.
+// 401 (expired token) and 400 (malformed body) still come back as their
+// usual statuses since the operator needs to act on those.
 router.post('/sms', A.requireAuthOrToken, (req, res) => {
-  const { messages } = req.body || {};
-  if (!Array.isArray(messages)) return res.status(400).json({ ok: false, error: 'messages required' });
+  const body = req.body || {};
+  // Accept either {messages:[...]} or a bare array for forgiving clients.
+  const messages = Array.isArray(body) ? body : (Array.isArray(body.messages) ? body.messages : null);
+  if (!messages) {
+    return res.status(400).json({
+      ok: false,
+      error: 'messages required',
+      hint: 'POST JSON: { "messages": [{ sender, body, ts }, ...] }',
+    });
+  }
+  // Empty batch is a valid "ping" — used by the app to verify auth + URL
+  // without a permission prompt.
+  if (messages.length === 0) {
+    return res.json({ ok: true, parsed: 0, insertedBank: 0, skipped: 0, ignored: 0,
+                      ping: true, server_time: new Date().toISOString() });
+  }
 
   // bank code → bank_id resolver. Priority:
   //   1. operator-taught override map (`code:DCB → bank_id 7`)
@@ -341,34 +363,62 @@ router.post('/sms', A.requireAuthOrToken, (req, res) => {
 
   let parsed = 0, unknownBank = 0, insertedBank = 0, insertedDw = 0, skipped = 0, ignored = 0;
   const unmapped = [];
+  const errors = []; // capture first few per-message failures for the response
 
-  const tx = db.transaction((items) => {
-    for (const m of items) {
+  // We DELIBERATELY do not wrap the whole batch in one db.transaction —
+  // earlier a single bad message (parse exception, malformed ts, etc.)
+  // would roll the entire batch back and the user would see a 500 with no
+  // hint of which message broke it. Per-row try/catch keeps good messages
+  // ingested and surfaces the bad ones for diagnosis.
+  for (const m of messages) {
+    try {
       const p = parseSms(m);
       if (!p) { ignored++; continue; }
       parsed++;
-      const bd = p.ts ? businessDate(new Date(p.ts).toISOString()) : currentBusinessDate();
+      let bd;
+      try { bd = p.ts ? businessDate(new Date(p.ts).toISOString()) : currentBusinessDate(); }
+      catch (_) { bd = currentBusinessDate(); }
       const bank_id = bankIdFor(p.bank);
       if (!bank_id && p.bank) { unknownBank++; unmapped.push(p.bank); }
-
       // NO MIRROR TO DW. Per business rule, the gaming panel (Freeplay /
-      // Testawl247 via the Chrome extension) is the SOLE source of truth
-      // for Deposit / Withdrawal rows. Bank credits/debits stay strictly
-      // in bank_txns — the reconciliation step (panel deposit vs bank
-      // credit) decides where the "leftover" credited amount lands
-      // (B2C BANK & EXP DETAILS / parking / etc).
+      // Testawl247) is the SOLE source of truth for Deposit / Withdrawal
+      // rows. Bank credits/debits stay strictly in bank_txns.
       const info = insBank.run(bd, p.ts || null, bank_id || null, p.type, p.amt,
                                (p.counterparty || p.raw.body.slice(0, 180)),
                                p.category || 'bank', 'sms', p.ext_ref,
                                p.balance, p.mode, req.user.id);
       if (info.changes) insertedBank++; else skipped++;
+    } catch (e) {
+      ignored++;
+      if (errors.length < 5) errors.push({
+        msg: String(e.message || e),
+        sample: (m && m.body || '').toString().slice(0, 80),
+      });
+      // Print full error to Railway logs so we can debug from server side too.
+      console.error('[/ingest/sms] message failed:', e.message, 'body:', (m && m.body || '').slice(0, 100));
     }
-  });
-  tx(messages);
+  }
 
-  audit(req.user.id, 'ingest', 'sms', null, { parsed, insertedBank, insertedDw, skipped, ignored, unknownBank });
-  res.json({ ok: true, parsed, insertedBank, insertedDw, skipped, ignored, unknownBank,
-             hint: unknownBank ? `Add banks to the Banks tab named like: ${[...new Set(unmapped)].join(', ')}` : null });
+  audit(req.user.id, 'ingest', 'sms', null, { parsed, insertedBank, insertedDw, skipped, ignored, unknownBank, errCount: errors.length });
+  res.json({
+    ok: true, parsed, insertedBank, insertedDw, skipped, ignored, unknownBank,
+    hint: unknownBank ? `Add banks named like: ${[...new Set(unmapped)].join(', ')}` : null,
+    errors: errors.length ? errors : undefined,
+    server_time: new Date().toISOString(),
+  });
+});
+
+// ── DIAGNOSTICS for the Android app ───────────────────────────
+// Bearer-only ping: returns { ok:true, user, server_time }. Lets the app
+// verify URL + token in one tap without needing SMS permission. The
+// existing "Test connection" button can hit this instead of /api/health
+// (which doesn't validate the token).
+router.get('/ping', A.requireAuthOrToken, (req, res) => {
+  res.json({
+    ok: true,
+    user: req.user && { id: req.user.id, username: req.user.username },
+    server_time: new Date().toISOString(),
+  });
 });
 
 // Dry-run parser for debugging: POST {body, sender} → returns what would be inserted

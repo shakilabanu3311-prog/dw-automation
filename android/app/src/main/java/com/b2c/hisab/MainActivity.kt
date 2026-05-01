@@ -29,9 +29,12 @@ class MainActivity : Activity() {
         }
 
         val tvTitle = TextView(this).apply { text = "B2C Hisab — SMS Sync"; textSize = 20f }
+        // Default points at the production Railway URL so first-time installs
+        // work without manual config. The user can still override for local
+        // dev (http://192.168.x.x:3000).
         val urlEt = EditText(this).apply {
-            hint = "Server URL (e.g. http://192.168.1.23:3000)"
-            setText(prefs.getString("url", "http://192.168.1.23:3000"))
+            hint = "Server URL"
+            setText(prefs.getString("url", "https://web-production-d340e.up.railway.app"))
         }
         val tokEt = EditText(this).apply {
             hint = "API token (web app → Settings → Tokens → New)"
@@ -82,12 +85,28 @@ class MainActivity : Activity() {
                         ?.bufferedReader()?.use { it.readText() } ?: ""
                     var msg = "Health: HTTP $code\n$body"
                     if (token.isNotBlank() && code == 200) {
-                        // Also test bearer token works
-                        val c2 = java.net.URL("$url/api/ingest/panel/status").openConnection() as java.net.HttpURLConnection
+                        // Hit the new diagnostics endpoint — bearer-only,
+                        // returns the logged-in user. Clearer than the panel
+                        // status check (which requires panel data).
+                        val c2 = java.net.URL("$url/api/ingest/ping").openConnection() as java.net.HttpURLConnection
                         c2.setRequestProperty("Authorization", "Bearer $token")
                         c2.connectTimeout = 8_000
                         val code2 = c2.responseCode
-                        msg += "\n\nToken check: HTTP $code2 ${if (code2 == 200) "(OK)" else "(invalid token)"}"
+                        val body2 = (if (code2 in 200..299) c2.inputStream else c2.errorStream)
+                            ?.bufferedReader()?.use { it.readText() } ?: ""
+                        msg += "\n\nToken check: HTTP $code2 ${if (code2 == 200) "(OK)" else "(invalid/expired token — re-mint in web app)"}\n$body2"
+                        // ALSO run a no-op SMS ping so we know the SMS pipeline itself is reachable.
+                        val c3 = java.net.URL("$url/api/ingest/sms").openConnection() as java.net.HttpURLConnection
+                        c3.requestMethod = "POST"
+                        c3.doOutput = true
+                        c3.setRequestProperty("Content-Type", "application/json")
+                        c3.setRequestProperty("Authorization", "Bearer $token")
+                        c3.connectTimeout = 8_000
+                        c3.outputStream.use { it.write("{\"messages\":[]}".toByteArray()) }
+                        val code3 = c3.responseCode
+                        val body3 = (if (code3 in 200..299) c3.inputStream else c3.errorStream)
+                            ?.bufferedReader()?.use { it.readText() } ?: ""
+                        msg += "\n\nSMS endpoint: HTTP $code3\n$body3"
                     }
                     runOnUiThread { statusView.text = msg }
                 } catch (e: Exception) {
