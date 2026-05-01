@@ -8,7 +8,7 @@ const { parseDcbPdf } = require('../parsers/dcb_pdf');
 const { parseGenericBankPdf } = require('../parsers/generic_pdf');
 const { parseGpayAuto } = require('../parsers/gpay');
 const { parseSms } = require('../parsers/sms');
-const { detectFromText } = require('../parsers/bankDetect');
+const { detectFromText, rememberOverride, loadOverrideMap, saveOverrideMap } = require('../parsers/bankDetect');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -58,9 +58,20 @@ router.post('/preview/bank-text', A.requireAuth, express.json({ limit: '5mb' }),
 });
 
 router.post('/commit/bank-statement', A.requireAuth, async (req, res) => {
-  const { rows, bank_id } = req.body || {};
+  const { rows, bank_id, detected } = req.body || {};
   if (!Array.isArray(rows)) return res.status(400).json({ ok: false, error: 'rows required' });
   if (!bank_id) return res.status(400).json({ ok: false, error: 'bank_id required (which bank is this statement for?)' });
+  // Teach the auto-detector if the operator picked a different bank than
+  // what was suggested. Next statement from the same acLast4 (or with the
+  // same detected bank code) will jump straight to this bank_id.
+  try {
+    if (detected && Number(bank_id)) {
+      const sameAsDetected = detected.bank_id && Number(detected.bank_id) === Number(bank_id);
+      if (!sameAsDetected) {
+        rememberOverride({ code: detected.code, acLast4: detected.ac_last4 }, Number(bank_id));
+      }
+    }
+  } catch (_) {}
   let insertedBank = 0, insertedDw = 0, skipped = 0;
   const insBank = db.prepare(`INSERT OR IGNORE INTO bank_txns(business_date, ts, bank_id, type, amt, detail, category, source, ext_ref, created_by)
                               VALUES (?,?,?,?,?,?,?,?,?,?)`);
@@ -218,6 +229,39 @@ router.delete('/tombstones/:extRef', A.requireAuth, (req, res) => {
   db.prepare('DELETE FROM deleted_ext_refs WHERE ext_ref = ?').run(req.params.extRef);
   audit(req.user.id, 'untombstone', 'ext_ref', null, { ext_ref: req.params.extRef });
   res.json({ ok: true });
+});
+
+// ── Bank-detection overrides (manual teach map) ─────────────────────
+// `bank_override_map` keys:
+//   "ac:<last4>"   → bank_id    (most specific — wins over code)
+//   "code:<CODE>"  → bank_id    (per detected bank code, e.g. DCB→bank 7)
+// These are auto-recorded on commit when the operator picks a bank that
+// differs from auto-detect. Surfaces here so the UI can show & clear them.
+router.get('/bank-overrides', A.requireAuth, (req, res) => {
+  const map = loadOverrideMap();
+  const banks = db.prepare('SELECT id, name FROM banks').all();
+  const byId = Object.fromEntries(banks.map(b => [b.id, b.name]));
+  const rows = Object.entries(map).map(([k, bid]) => ({
+    key: k, bank_id: bid, bank_name: byId[bid] || `(deleted #${bid})`,
+  }));
+  res.json({ ok: true, rows, banks });
+});
+router.post('/bank-overrides', A.requireAuth, (req, res) => {
+  const { key, bank_id } = req.body || {};
+  if (!key) return res.status(400).json({ ok: false, error: 'key required (e.g. "ac:1234" or "code:DCB")' });
+  if (!Number(bank_id)) return res.status(400).json({ ok: false, error: 'bank_id required' });
+  const map = loadOverrideMap();
+  map[String(key)] = Number(bank_id);
+  saveOverrideMap(map);
+  audit(req.user.id, 'update', 'bank_override', null, { key, bank_id });
+  res.json({ ok: true, map });
+});
+router.delete('/bank-overrides/:key', A.requireAuth, (req, res) => {
+  const map = loadOverrideMap();
+  delete map[req.params.key];
+  saveOverrideMap(map);
+  audit(req.user.id, 'delete', 'bank_override', null, { key: req.params.key });
+  res.json({ ok: true, map });
 });
 
 // Read/write the panel_map settings entry. Used by the Settings UI.

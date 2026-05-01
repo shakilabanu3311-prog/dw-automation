@@ -1000,7 +1000,7 @@
       }
       if (!bankId) toast('Pick a bank from the dropdown before committing', true);
       // bank_id is read dynamically at commit time so user can pick after preview
-      renderPreview('#bsPreview', r.rows, 'bank-statement', ['date','narration','amt','type','category','name','utr','entryKind','business_date','duplicate'], { _bankFromDropdown: '#bs-bank' }, banner);
+      renderPreview('#bsPreview', r.rows, 'bank-statement', ['date','narration','amt','type','category','name','utr','entryKind','business_date','duplicate'], { _bankFromDropdown: '#bs-bank', _detected: det }, banner);
     } catch (e) {
       console.error('[preview] failed', e);
       $('#bsPreview').innerHTML = `<div class="pill err" style="display:block;padding:10px;margin-top:10px">Preview failed: ${esc(e.message)}</div>`;
@@ -1030,7 +1030,7 @@
         $('#bsPastePreview').innerHTML = banner + '<div class="mute" style="margin-top:10px">No rows parsed — try copying more of the page (Ctrl+A → Ctrl+C).</div>';
         return toast('No rows parsed from pasted text', true);
       }
-      renderPreview('#bsPastePreview', r.rows, 'bank-statement', ['date','narration','amt','type','category','name','utr','entryKind','business_date','duplicate'], { _bankFromDropdown: '#bs-bank-paste' }, banner);
+      renderPreview('#bsPastePreview', r.rows, 'bank-statement', ['date','narration','amt','type','category','name','utr','entryKind','business_date','duplicate'], { _bankFromDropdown: '#bs-bank-paste', _detected: det }, banner);
     } catch (e) {
       $('#bsPastePreview').innerHTML = `<div class="pill err" style="display:block;padding:10px;margin-top:10px">Preview failed: ${esc(e.message)}</div>`;
       toast(e.message, true);
@@ -1094,8 +1094,12 @@
         }
         delete dynExtra._bankFromDropdown;
       }
+      // Pass the auto-detect result through so the server can teach itself
+      // when the operator picks a bank that differs from auto-detect.
+      const detectedSnapshot = dynExtra._detected || null;
+      delete dynExtra._detected;
       try {
-        const res = await api('/api/ingest/commit/' + kind, { method: 'POST', body: { rows: payload, ...dynExtra } });
+        const res = await api('/api/ingest/commit/' + kind, { method: 'POST', body: { rows: payload, detected: detectedSnapshot, ...dynExtra } });
         toast(`Inserted ${res.insertedBank || res.inserted || 0} + ${res.insertedDw || 0}, skipped ${res.skipped || 0}`);
         $(sel).innerHTML = '';
         loadHisab();

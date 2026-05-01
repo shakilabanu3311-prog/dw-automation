@@ -180,12 +180,61 @@ function autoRegister(code, acLast4, holder) {
   return { bank, created: true };
 }
 
+// Operator-taught overrides: when auto-detect picks the WRONG bank, the user
+// manually selects the correct one in the dropdown and commits. The commit
+// route remembers `acLast4 → bank_id` and `code → bank_id` mappings so the
+// NEXT statement upload from the same source skips the (wrong) auto-detect
+// and jumps straight to the operator's choice. Stored in `settings` as JSON
+// under key `bank_override_map`.
+function loadOverrideMap() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key='bank_override_map'").get();
+    if (row && row.value) return JSON.parse(row.value) || {};
+  } catch (_) {}
+  return {};
+}
+function saveOverrideMap(map) {
+  db.prepare(`INSERT INTO settings(key, value) VALUES ('bank_override_map', ?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(JSON.stringify(map));
+}
+// Lookup priority: acLast4 (most specific) > detected code (any account from
+// that bank). Returns the matching banks-table row if the override resolves.
+function resolveOverride(code, acLast4) {
+  const map = loadOverrideMap();
+  const tryKeys = [
+    acLast4 ? `ac:${acLast4}` : null,
+    code ? `code:${code}` : null,
+  ].filter(Boolean);
+  for (const k of tryKeys) {
+    const bid = map[k];
+    if (!bid) continue;
+    const row = db.prepare('SELECT id, name, holder, acno FROM banks WHERE id = ?').get(bid);
+    if (row) return { bank: row, key: k };
+  }
+  return null;
+}
+// Called by commit route when operator's pick differs from auto-detect.
+function rememberOverride({ code, acLast4 }, bank_id) {
+  if (!bank_id) return;
+  const map = loadOverrideMap();
+  let changed = false;
+  if (acLast4) { map[`ac:${acLast4}`] = bank_id; changed = true; }
+  if (code)    { map[`code:${code}`]  = bank_id; changed = true; }
+  if (changed) saveOverrideMap(map);
+}
+
 function detectFromText(text, opts = {}) {
   const code = detectBankCode(text);
   const acLast4 = extractAccountNo(text);
   const holder = extractHolder(text);
   const signals = transactionBankSignals(text);
-  let match = matchBankInDb(code, acLast4);
+  // 1. Operator-taught override wins over name/IFSC matching. If the user
+  //    has already corrected this acLast4 (or this bank code) once, we
+  //    short-circuit straight to their pick.
+  const override = resolveOverride(code, acLast4);
+  let match = override ? { bank: override.bank, confidence: 'high', via: 'override' } : null;
+  // 2. Otherwise fall back to the standard match-in-DB logic.
+  if (!match) match = matchBankInDb(code, acLast4);
   let created = false;
   if (!match && opts.autoRegister && code) {
     const reg = autoRegister(code, acLast4, holder);
@@ -204,4 +253,8 @@ function detectFromText(text, opts = {}) {
   };
 }
 
-module.exports = { detectFromText, detectBankCode, extractAccountNo, extractHolder, matchBankInDb, autoRegister, transactionBankSignals };
+module.exports = {
+  detectFromText, detectBankCode, extractAccountNo, extractHolder,
+  matchBankInDb, autoRegister, transactionBankSignals,
+  loadOverrideMap, saveOverrideMap, resolveOverride, rememberOverride,
+};
