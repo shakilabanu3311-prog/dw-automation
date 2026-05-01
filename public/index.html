@@ -196,8 +196,17 @@
         <form id="xferForm" class="grid">
           <select id="xfer-from"><option value="">From bank…</option></select>
           <select id="xfer-to"><option value="">To bank…</option></select>
+          <select id="xfer-purpose" title="Why are we transferring? — appears in the sheet detail">
+            <option value="">Purpose: General</option>
+            <option value="For Withdrawal">For Withdrawal</option>
+            <option value="For Deposit Payout">For Deposit Payout</option>
+            <option value="For Bank Charge">For Bank Charge</option>
+            <option value="For Salary">For Salary</option>
+            <option value="For Expense">For Expense</option>
+            <option value="For Parking">For Parking</option>
+          </select>
           <input id="xfer-amt" type="number" step="0.01" min="0" placeholder="Amount" required/>
-          <input id="xfer-remark" placeholder="Remark (optional)"/>
+          <input id="xfer-remark" placeholder="Customer / panel / extra note (optional)"/>
           <button class="primary" type="submit">Transfer</button>
         </form>
       </div>

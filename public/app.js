@@ -984,12 +984,18 @@
       if (!from || !to) return toast('Pick both source and destination banks', true);
       if (from === to) return toast('From and To must be different banks', true);
       if (!Number.isFinite(amt) || amt <= 0) return toast('Enter a positive amount', true);
+      // Compose remark = "<purpose> · <free note>" so the sheet detail tells
+      // the operator exactly why this transfer happened (e.g. "For Withdrawal
+      // · Rakesh 1XBET0002"). Both fields are optional; we drop empty pieces.
+      const purpose = ($('#xfer-purpose') && $('#xfer-purpose').value || '').trim();
+      const note    = ($('#xfer-remark').value || '').trim();
+      const remark  = [purpose, note].filter(Boolean).join(' · ');
       try {
         const r = await api('/api/transfers', { method: 'POST', body: {
           business_date: BD, from_bank_id: from, to_bank_id: to,
-          amt, remark: $('#xfer-remark').value || '',
+          amt, remark, purpose, note,
         } });
-        toast(`Transferred ₹${amt} · ${r.from} → ${r.to}${r.cross_branch ? ' (cross-branch)' : ''}`);
+        toast(`Transferred ₹${amt} · ${r.from} → ${r.to}${r.cross_branch ? ' (cross-branch)' : ''}${purpose ? ' (' + purpose + ')' : ''}`);
         e.target.reset();
         loadTransfers(); loadBankTxns(); loadHisab();
       } catch (err) { toast(err.message, true); }
@@ -1001,14 +1007,24 @@
     try {
       const r = await api('/api/transfers?date=' + encodeURIComponent(BD));
       if (!r.rows || !r.rows.length) { wrap.innerHTML = '<div class="mute">No transfers today.</div>'; return; }
-      const head = '<tr><th>From</th><th>To</th><th style="text-align:right">Amount</th><th>Cross-branch</th><th></th></tr>';
+      const head = '<tr><th>From</th><th>To</th><th style="text-align:right">Amount</th><th>Purpose / Note</th><th>Cross-branch</th><th></th></tr>';
       const body = r.rows.map(x => {
         const f = x.from || {}, t = x.to || {};
         const cross = (f.branch_code && t.branch_code && f.branch_code !== t.branch_code);
+        // Pull the human-readable purpose+note out of the FROM-leg detail.
+        // Detail is shaped like "<remark> → <to bank> [BRANCH]"; strip the
+        // arrow tail so only the remark survives.
+        let purpose = '';
+        if (f.detail) {
+          const cut = f.detail.indexOf(' → ');
+          purpose = cut > -1 ? f.detail.slice(0, cut) : f.detail;
+          if (purpose === 'Internal Transfer') purpose = '';
+        }
         return `<tr>
           <td>${esc(f.bank_name || '')}${f.branch_code ? ' <span class="mute">[' + esc(f.branch_code) + ']</span>' : ''}</td>
           <td>${esc(t.bank_name || '')}${t.branch_code ? ' <span class="mute">[' + esc(t.branch_code) + ']</span>' : ''}</td>
           <td style="text-align:right">${Number(x.amt || 0).toLocaleString('en-IN')}</td>
+          <td>${esc(purpose)}</td>
           <td>${cross ? '<span class="pill">cross-branch</span>' : ''}</td>
           <td><button class="danger" data-xfer-del="${x.xfer_id}">del</button></td>
         </tr>`;
