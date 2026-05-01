@@ -100,7 +100,8 @@ function parseLines(text) {
     const entryKind = classifyEntryKind(narration, direction);
     const party = extractParty(narration);
 
-    const ext_ref = party.utr ? `dcb:${party.utr}` : `dcb:${date}|${amount.toFixed(2)}|${narration.slice(0, 30)}`;
+    // Canonical UTR-keyed ext_ref — dedupes against SMS / generic-PDF rows.
+    const ext_ref = party.utr ? `utr:${String(party.utr).trim().toUpperCase()}` : `dcb:${date}|${amount.toFixed(2)}|${narration.slice(0, 30)}`;
     rows.push({
       business_date: businessDate(date + 'T12:00:00+05:30') || date,
       date,

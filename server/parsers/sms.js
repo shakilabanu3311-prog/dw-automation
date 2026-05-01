@@ -85,9 +85,14 @@ function extractCounterparty(body) {
   return null;
 }
 
-// Build a stable dedupe key even if the same SMS comes via two routes
+// Build a stable dedupe key. When a UTR is present we use the SOURCE-
+// INDEPENDENT canonical form `utr:<UTR>` so the same UTR arriving via
+// SMS, PDF statement, or paste-text all collapse onto a single bank_txns
+// row (UNIQUE constraint on ext_ref does the work). When no UTR is
+// available, fall back to a per-source composite key so distinct rows
+// don't collapse onto each other.
 function makeExtRef({ bank, ts, amt, utr, direction }) {
-  if (utr) return `sms:${bank}:${utr}`;
+  if (utr) return `utr:${String(utr).trim().toUpperCase()}`;
   return `sms:${bank}:${direction}:${amt}:${ts || ''}`;
 }
 

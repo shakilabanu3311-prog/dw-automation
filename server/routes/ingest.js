@@ -308,19 +308,30 @@ router.post('/sms', A.requireAuthOrToken, (req, res) => {
   const { messages } = req.body || {};
   if (!Array.isArray(messages)) return res.status(400).json({ ok: false, error: 'messages required' });
 
-  // bank name → bank_id map (case-insensitive match on "name" column)
-  let allBanks = db.prepare('SELECT id, name FROM banks').all();
+  // bank code → bank_id resolver. Priority:
+  //   1. operator-taught override map (`code:DCB → bank_id 7`)
+  //   2. fuzzy name match against existing banks
+  //   3. give up — return null and report as `unknownBank` so the operator
+  //      can either add the bank to the sheet OR add a manual override.
+  // We INTENTIONALLY do NOT auto-create banks anymore: every SMS variant
+  // ("HDFCBK", "HDFC", "HDFC Bank") was creating a duplicate row in the
+  // sheet, splitting the bank's daily totals across multiple rows. With
+  // override + fuzzy match, the operator is in control.
+  const allBanks = db.prepare('SELECT id, name FROM banks').all();
+  let overrideMap = {};
+  try { overrideMap = require('../parsers/bankDetect').loadOverrideMap() || {}; } catch (_) {}
   const bankIdFor = (code) => {
     if (!code) return null;
-    const lc = code.toLowerCase();
-    const hit = allBanks.find(b => (b.name || '').toLowerCase().includes(lc) ||
-                                    lc.includes((b.name || '').toLowerCase()));
-    if (hit) return hit.id;
-    // Auto-create a new bank row when SMS references an unknown bank
-    const info = db.prepare('INSERT INTO banks(name, holder, acno, open_balance) VALUES (?,?,?,?)')
-                   .run(code, '', '', 0);
-    allBanks = db.prepare('SELECT id, name FROM banks').all();
-    return info.lastInsertRowid;
+    // 1. operator override
+    const ov = overrideMap[`code:${code}`];
+    if (ov) return ov;
+    // 2. fuzzy match
+    const lc = String(code).toLowerCase();
+    const hit = allBanks.find(b => {
+      const nm = (b.name || '').toLowerCase();
+      return nm && (nm.includes(lc) || lc.includes(nm));
+    });
+    return hit ? hit.id : null;
   };
 
   const insBank = db.prepare(`INSERT OR IGNORE INTO bank_txns(business_date, ts, bank_id, type, amt, detail, category, source, ext_ref, balance, mode, created_by)

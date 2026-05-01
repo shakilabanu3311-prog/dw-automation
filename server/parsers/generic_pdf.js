@@ -200,7 +200,9 @@ async function parseGenericBankPdf(buffer) {
     const name = extractName(r.narration);
     const utr = extractUtr(r.narration);
     const mode = detectMode(r.narration);
-    const ext_ref = utr ? `pdf:${utr}` : `pdf:${r.date}|${amt.toFixed(2)}|${r.narration.slice(0, 40)}`;
+    // Canonical UTR-keyed ext_ref so PDF + SMS + paste-text rows for the
+    // same transaction collapse onto a single bank_txns row.
+    const ext_ref = utr ? `utr:${String(utr).trim().toUpperCase()}` : `pdf:${r.date}|${amt.toFixed(2)}|${r.narration.slice(0, 40)}`;
     return {
       business_date: businessDate(r.date + 'T12:00:00+05:30') || r.date,
       date: r.date,
