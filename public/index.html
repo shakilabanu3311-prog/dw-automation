@@ -164,8 +164,18 @@
           <input id="bk-holder" placeholder="Holder"/>
           <input id="bk-acno" placeholder="A/c no"/>
           <input id="bk-open" type="number" step="0.01" placeholder="Opening balance"/>
+          <select id="bk-branch" title="Which branch this bank belongs to. Determines which branch sheet (B1/B2/B3) it appears in.">
+            <option value="">— branch —</option>
+            <option value="B1">B1</option>
+            <option value="B2">B2</option>
+            <option value="B3">B3</option>
+          </select>
           <button class="primary" type="submit">Add bank</button>
         </form>
+        <p class="mute" style="font-size:12px;margin:6px 0 0 0">
+          Each bank belongs to one branch. Statements uploaded under it sync to MAIN + that branch's sheet automatically.
+          Up to 50 banks per branch.
+        </p>
       </div>
       <div class="card"><h2>Banks</h2><div id="banksTable"></div></div>
     </div>

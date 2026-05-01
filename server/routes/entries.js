@@ -33,21 +33,45 @@ router.get('/banks/registry', (req, res) => {
   }
 });
 router.post('/banks', (req, res) => {
-  const { name, holder, acno, open_balance } = req.body || {};
+  const { name, holder, acno, open_balance, branch_code } = req.body || {};
   if (!name) return res.status(400).json({ ok: false, error: 'name required' });
-  const info = db.prepare('INSERT INTO banks(name, holder, acno, open_balance) VALUES (?,?,?,?)')
-    .run(name, holder || '', acno || '', Number(open_balance) || 0);
-  audit(req.user.id, 'create', 'bank', info.lastInsertRowid, { name });
+  // Validate branch_code (B1/B2/B3 or empty). Anything else is rejected so a
+  // typo doesn't silently strand the bank in a phantom branch where it
+  // never appears on any sheet.
+  const bc = String(branch_code || '').trim().toUpperCase();
+  if (bc && !['B1','B2','B3'].includes(bc))
+    return res.status(400).json({ ok: false, error: 'branch_code must be B1, B2, B3, or empty' });
+  // Cap at 50 banks per branch — matches the master template's 50-row BANK
+  // block (rows 3..52). More than 50 in one branch would overflow the sheet.
+  if (bc) {
+    const count = db.prepare('SELECT COUNT(*) AS n FROM banks WHERE branch_code = ?').get(bc).n;
+    if (count >= 50) return res.status(400).json({ ok: false, error: `Branch ${bc} already has 50 banks (template max). Move some to another branch first.` });
+  }
+  const info = db.prepare('INSERT INTO banks(name, holder, acno, open_balance, branch_code) VALUES (?,?,?,?,?)')
+    .run(name, holder || '', acno || '', Number(open_balance) || 0, bc || null);
+  audit(req.user.id, 'create', 'bank', info.lastInsertRowid, { name, branch_code: bc });
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 router.patch('/banks/:id', (req, res) => {
   const id = Number(req.params.id);
-  const { name, holder, acno, open_balance } = req.body || {};
+  const { name, holder, acno, open_balance, branch_code } = req.body || {};
   const cur = db.prepare('SELECT * FROM banks WHERE id = ?').get(id);
   if (!cur) return res.status(404).json({ ok: false, error: 'not found' });
-  db.prepare('UPDATE banks SET name=?, holder=?, acno=?, open_balance=? WHERE id=?')
+  let bc = cur.branch_code;
+  if (branch_code !== undefined) {
+    bc = String(branch_code || '').trim().toUpperCase();
+    if (bc && !['B1','B2','B3'].includes(bc))
+      return res.status(400).json({ ok: false, error: 'branch_code must be B1, B2, B3, or empty' });
+    // Re-check the per-branch cap if the bank is moving INTO a branch.
+    if (bc && bc !== cur.branch_code) {
+      const count = db.prepare('SELECT COUNT(*) AS n FROM banks WHERE branch_code = ? AND id != ?').get(bc, id).n;
+      if (count >= 50) return res.status(400).json({ ok: false, error: `Branch ${bc} already has 50 banks (template max).` });
+    }
+  }
+  db.prepare('UPDATE banks SET name=?, holder=?, acno=?, open_balance=?, branch_code=? WHERE id=?')
     .run(name ?? cur.name, holder ?? cur.holder, acno ?? cur.acno,
-         (open_balance === undefined ? cur.open_balance : Number(open_balance) || 0), id);
+         (open_balance === undefined ? cur.open_balance : Number(open_balance) || 0),
+         bc || null, id);
   audit(req.user.id, 'update', 'bank', id);
   res.json({ ok: true });
 });

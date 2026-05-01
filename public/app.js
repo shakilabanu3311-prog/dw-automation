@@ -808,12 +808,29 @@
     if ($('#xfer-to'))   $('#xfer-to').innerHTML   = xferOpts('To bank…');
     const bsBank = $('#bs-bank');
     if (bsBank) {
-      // User's banks first, then full Indian-banks registry as a separate optgroup
+      // Group user banks by branch so 50-banks-per-branch stays scannable.
+      // The search box (#bs-bank-search) filters across all optgroups, so the
+      // operator can either: (a) scroll to "Branch B2 — 50 banks" and pick,
+      // or (b) just type the bank name and hit the first match instantly.
       let html = '<option value="">— select which bank this statement is for —</option>';
       if (banks.rows.length) {
-        html += '<optgroup label="Your banks">';
-        html += banks.rows.map(b => `<option value="${b.id}">${esc(b.name)} ${b.holder ? '· ' + esc(b.holder) : ''}</option>`).join('');
-        html += '</optgroup>';
+        const byBranch = {};
+        for (const b of banks.rows) {
+          const code = b.branch_code || '— No branch —';
+          (byBranch[code] = byBranch[code] || []).push(b);
+        }
+        // Ordered list: explicit branches first (B1, B2, B3, …), unbranched last.
+        const branchOrder = Object.keys(byBranch).sort((a, b) => {
+          if (a.startsWith('—')) return 1;
+          if (b.startsWith('—')) return -1;
+          return a.localeCompare(b);
+        });
+        for (const code of branchOrder) {
+          const list = byBranch[code];
+          html += `<optgroup label="${esc(code)} — ${list.length} bank${list.length === 1 ? '' : 's'}">`;
+          html += list.map(b => `<option value="${b.id}" data-branch="${esc(b.branch_code || '')}">${esc(b.name)}${b.holder ? ' · ' + esc(b.holder) : ''}</option>`).join('');
+          html += '</optgroup>';
+        }
       }
       try {
         const reg = await api('/api/banks/registry');
@@ -870,6 +887,35 @@
     });
     $('#dw-panel').innerHTML = popts;
     $('#gp-panel').innerHTML = popts;
+
+    // Sync-target banner: when the user picks a bank in either upload
+    // dropdown, surface which sheets the entries will flow to (MAIN +
+    // the bank's branch sheet). Each entry hits BOTH sheets within ~3s
+    // via scheduleLiveSync so the operator doesn't have to push manually.
+    function paintSyncBanner(selId, bannerId) {
+      const sel = $(selId); if (!sel) return;
+      const paint = () => {
+        const opt = sel.options[sel.selectedIndex];
+        const branch = opt && opt.dataset && opt.dataset.branch;
+        let el = document.getElementById(bannerId);
+        if (!el) {
+          el = document.createElement('div');
+          el.id = bannerId;
+          el.style.cssText = 'font-size:12px;margin:4px 0 0 0;color:#7cd3ff';
+          sel.parentNode.appendChild(el);
+        }
+        if (!sel.value) { el.textContent = ''; return; }
+        if (branch) {
+          el.textContent = `↪ Entries will sync to MAIN sheet AND Branch ${branch} sheet (≈3s)`;
+        } else {
+          el.textContent = '↪ Entries will sync to MAIN sheet (no branch assigned to this bank)';
+        }
+      };
+      sel.addEventListener('change', paint);
+      paint();
+    }
+    paintSyncBanner('#bs-bank',       'bs-bank-sync');
+    paintSyncBanner('#bs-bank-paste', 'bs-bank-paste-sync');
   }
 
   // ── Hisab ──────────────────────────────────────────────────
@@ -945,12 +991,15 @@
     await api('/api/banks', { method: 'POST', body: {
       name: $('#bk-name').value, holder: $('#bk-holder').value,
       acno: $('#bk-acno').value, open_balance: Number($('#bk-open').value) || 0,
+      branch_code: $('#bk-branch') ? $('#bk-branch').value : '',
     } });
     e.target.reset(); loadBanks(); loadDropdowns();
   });
   async function loadBanks() {
     const r = await api('/api/banks');
-    $('#banksTable').innerHTML = tableOf(r.rows, ['name','holder','acno','open_balance'],
+    // Show branch_code so the operator can see at a glance which branch
+    // each bank routes to (and quickly spot any unbranched ones).
+    $('#banksTable').innerHTML = tableOf(r.rows, ['name','holder','acno','branch_code','open_balance'],
       (row) => `<button class="danger" data-del="/api/banks/${row.id}">del</button>`);
     wireDel('#banksTable', () => { loadBanks(); loadDropdowns(); });
   }
