@@ -988,18 +988,37 @@
   // ── Banks ──────────────────────────────────────────────────
   $('#bankForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    await api('/api/banks', { method: 'POST', body: {
-      name: $('#bk-name').value, holder: $('#bk-holder').value,
-      acno: $('#bk-acno').value, open_balance: Number($('#bk-open').value) || 0,
-      branch_code: $('#bk-branch') ? $('#bk-branch').value : '',
-    } });
-    e.target.reset(); loadBanks(); loadDropdowns();
+    try {
+      const r = await api('/api/banks', { method: 'POST', body: {
+        name: $('#bk-name').value, holder: $('#bk-holder').value,
+        acno: $('#bk-acno').value, open_balance: Number($('#bk-open').value) || 0,
+        branch_code: $('#bk-branch') ? $('#bk-branch').value : '',
+      } });
+      // Tell the operator EXACTLY which sheet column this new bank lands
+      // in — so they can label that block in the master sheet to match.
+      const colLetter = (c) => { let s=''; let n=Number(c); do { s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; } while (n>=0); return s; };
+      const col = r.sheet_slot ? colLetter(38 + (Number(r.sheet_slot) - 1) * 8) : null;
+      if (r.sheet_slot) {
+        toast(`Bank added · sheet slot #${r.sheet_slot} (col ${col}). Update slot ${r.sheet_slot}'s header in the sheet to "${$('#bk-name').value}" / "${$('#bk-holder').value || ''}" so labels match.`);
+      } else {
+        toast('Bank added but no free sheet slot. Free a slot or template is full.', true);
+      }
+      e.target.reset(); loadBanks(); loadDropdowns();
+    } catch (err) { toast(err.message, true); }
   });
   async function loadBanks() {
     const r = await api('/api/banks');
-    // Show branch_code so the operator can see at a glance which branch
-    // each bank routes to (and quickly spot any unbranched ones).
-    $('#banksTable').innerHTML = tableOf(r.rows, ['name','holder','acno','branch_code','open_balance'],
+    // Show branch_code + sheet_slot + the Excel column letter the slot maps
+    // to. This way the operator can VERIFY the bank is bound to the right
+    // ledger block before uploading a statement under it.
+    //   Slot 1 -> col AM   Slot 2 -> col AU   ... Slot 50 -> col PO
+    const colLetter = (c) => { let s=''; let n=Number(c); do { s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; } while (n>=0); return s; };
+    const slotToCol = (slot) => slot ? colLetter(38 + (Number(slot) - 1) * 8) : '';
+    const enriched = r.rows.map(row => ({
+      ...row,
+      sheet_slot_label: row.sheet_slot ? `#${row.sheet_slot} (col ${slotToCol(row.sheet_slot)})` : '(no slot — won\'t sync to sheet)',
+    }));
+    $('#banksTable').innerHTML = tableOf(enriched, ['name','holder','acno','branch_code','sheet_slot_label','open_balance'],
       (row) => `<button class="danger" data-del="/api/banks/${row.id}">del</button>`);
     wireDel('#banksTable', () => { loadBanks(); loadDropdowns(); });
   }

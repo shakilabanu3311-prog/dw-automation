@@ -62,7 +62,7 @@ router.post('/banks', (req, res) => {
 });
 router.patch('/banks/:id', (req, res) => {
   const id = Number(req.params.id);
-  const { name, holder, acno, open_balance, branch_code } = req.body || {};
+  const { name, holder, acno, open_balance, branch_code, sheet_slot } = req.body || {};
   const cur = db.prepare('SELECT * FROM banks WHERE id = ?').get(id);
   if (!cur) return res.status(404).json({ ok: false, error: 'not found' });
   let bc = cur.branch_code;
@@ -70,18 +70,33 @@ router.patch('/banks/:id', (req, res) => {
     bc = String(branch_code || '').trim().toUpperCase();
     if (bc && !['B1','B2','B3'].includes(bc))
       return res.status(400).json({ ok: false, error: 'branch_code must be B1, B2, B3, or empty' });
-    // Re-check the per-branch cap if the bank is moving INTO a branch.
     if (bc && bc !== cur.branch_code) {
       const count = db.prepare('SELECT COUNT(*) AS n FROM banks WHERE branch_code = ? AND id != ?').get(bc, id).n;
       if (count >= 50) return res.status(400).json({ ok: false, error: `Branch ${bc} already has 50 banks (template max).` });
     }
   }
-  db.prepare('UPDATE banks SET name=?, holder=?, acno=?, open_balance=?, branch_code=? WHERE id=?')
+  // Allow operator to manually pin a bank to a specific sheet_slot (1..50).
+  // Useful when the existing sheet has labels like "karnataka" hard-coded
+  // at slot 2 and the operator wants the system bank to bind to that slot.
+  // We refuse if the slot is already taken by a DIFFERENT bank — they need
+  // to swap the other one out first.
+  let slot = cur.sheet_slot;
+  if (sheet_slot !== undefined) {
+    const s = sheet_slot === null || sheet_slot === '' ? null : Number(sheet_slot);
+    if (s != null && (!Number.isInteger(s) || s < 1 || s > 50))
+      return res.status(400).json({ ok: false, error: 'sheet_slot must be an integer 1..50 (or null)' });
+    if (s != null) {
+      const taken = db.prepare('SELECT id, name FROM banks WHERE sheet_slot = ? AND id != ?').get(s, id);
+      if (taken) return res.status(400).json({ ok: false, error: `Slot ${s} is already taken by "${taken.name}" (id ${taken.id}). Move that bank first.` });
+    }
+    slot = s;
+  }
+  db.prepare('UPDATE banks SET name=?, holder=?, acno=?, open_balance=?, branch_code=?, sheet_slot=? WHERE id=?')
     .run(name ?? cur.name, holder ?? cur.holder, acno ?? cur.acno,
          (open_balance === undefined ? cur.open_balance : Number(open_balance) || 0),
-         bc || null, id);
-  audit(req.user.id, 'update', 'bank', id);
-  res.json({ ok: true });
+         bc || null, slot, id);
+  audit(req.user.id, 'update', 'bank', id, { sheet_slot: slot });
+  res.json({ ok: true, sheet_slot: slot });
 });
 router.delete('/banks/:id', (req, res) => {
   db.prepare('DELETE FROM banks WHERE id = ?').run(Number(req.params.id));
