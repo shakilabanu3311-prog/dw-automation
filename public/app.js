@@ -800,6 +800,12 @@
     const popts = '<option value="">(panel)</option>' + panels.rows.map(p => `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('');
     $('#bt-bank').innerHTML = bopts;
     $('#gp-bank').innerHTML = bopts;
+    // Internal transfer dropdowns — show branch code next to bank name so
+    // operators can tell same-branch vs cross-branch transfers at a glance.
+    const xferOpts = (placeholder) => '<option value="">' + placeholder + '</option>'
+      + banks.rows.map(b => `<option value="${b.id}">${esc(b.name)}${b.branch_code ? ' [' + esc(b.branch_code) + ']' : ''}${b.holder ? ' · ' + esc(b.holder) : ''}</option>`).join('');
+    if ($('#xfer-from')) $('#xfer-from').innerHTML = xferOpts('From bank…');
+    if ($('#xfer-to'))   $('#xfer-to').innerHTML   = xferOpts('To bank…');
     const bsBank = $('#bs-bank');
     if (bsBank) {
       // User's banks first, then full Indian-banks registry as a separate optgroup
@@ -966,6 +972,61 @@
       (row) => `<button class="danger" data-del="/api/bank-txns/${row.id}">del</button>`);
     wireDel('#bkTxnTable', () => { loadBankTxns(); loadHisab(); });
   }
+
+  // ── Internal transfer (bank → bank) ───────────────────────────
+  const xferForm = $('#xferForm');
+  if (xferForm) {
+    xferForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const from = Number($('#xfer-from').value);
+      const to   = Number($('#xfer-to').value);
+      const amt  = Number($('#xfer-amt').value);
+      if (!from || !to) return toast('Pick both source and destination banks', true);
+      if (from === to) return toast('From and To must be different banks', true);
+      if (!Number.isFinite(amt) || amt <= 0) return toast('Enter a positive amount', true);
+      try {
+        const r = await api('/api/transfers', { method: 'POST', body: {
+          business_date: BD, from_bank_id: from, to_bank_id: to,
+          amt, remark: $('#xfer-remark').value || '',
+        } });
+        toast(`Transferred ₹${amt} · ${r.from} → ${r.to}${r.cross_branch ? ' (cross-branch)' : ''}`);
+        e.target.reset();
+        loadTransfers(); loadBankTxns(); loadHisab();
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+  async function loadTransfers() {
+    const wrap = $('#xferTable');
+    if (!wrap) return;
+    try {
+      const r = await api('/api/transfers?date=' + encodeURIComponent(BD));
+      if (!r.rows || !r.rows.length) { wrap.innerHTML = '<div class="mute">No transfers today.</div>'; return; }
+      const head = '<tr><th>From</th><th>To</th><th style="text-align:right">Amount</th><th>Cross-branch</th><th></th></tr>';
+      const body = r.rows.map(x => {
+        const f = x.from || {}, t = x.to || {};
+        const cross = (f.branch_code && t.branch_code && f.branch_code !== t.branch_code);
+        return `<tr>
+          <td>${esc(f.bank_name || '')}${f.branch_code ? ' <span class="mute">[' + esc(f.branch_code) + ']</span>' : ''}</td>
+          <td>${esc(t.bank_name || '')}${t.branch_code ? ' <span class="mute">[' + esc(t.branch_code) + ']</span>' : ''}</td>
+          <td style="text-align:right">${Number(x.amt || 0).toLocaleString('en-IN')}</td>
+          <td>${cross ? '<span class="pill">cross-branch</span>' : ''}</td>
+          <td><button class="danger" data-xfer-del="${x.xfer_id}">del</button></td>
+        </tr>`;
+      }).join('');
+      wrap.innerHTML = `<div style="overflow:auto"><table>${head}${body}</table></div>`;
+      wrap.querySelectorAll('[data-xfer-del]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Delete this transfer? Both sides will be removed and tombstoned.')) return;
+          try {
+            await api('/api/transfers/' + btn.dataset.xferDel, { method: 'DELETE' });
+            loadTransfers(); loadBankTxns(); loadHisab();
+          } catch (e) { toast(e.message, true); }
+        });
+      });
+    } catch (e) { wrap.innerHTML = `<div class="pill err">${esc(e.message)}</div>`; }
+  }
+  // Refresh transfers list whenever the user opens the Transfer tab
+  document.querySelectorAll('[data-tab="transfer"]').forEach(b => b.addEventListener('click', loadTransfers));
 
   // ── Uploads ────────────────────────────────────────────────
   $('#bsPreviewBtn').addEventListener('click', async () => {

@@ -99,6 +99,7 @@
     <button data-tab="gpay">GPay</button>
     <button data-tab="banks">Banks</button>
     <button data-tab="banktxn">Bank Txns</button>
+    <button data-tab="transfer">Transfer</button>
     <button data-tab="uploads">Uploads</button>
     <button data-tab="panels">Panels</button>
     <button data-tab="sheet">Sheet</button>
@@ -182,6 +183,28 @@
         </form>
       </div>
       <div class="card"><h2>Bank transactions</h2><div id="bkTxnTable"></div></div>
+    </div>
+
+    <div id="tab-transfer" class="tabpanel">
+      <div class="card">
+        <h2>Internal Transfer — bank to bank</h2>
+        <p class="mute" style="font-size:12px;margin:4px 0 10px">
+          Move funds between your own banks (same branch or cross-branch).
+          Source bank gets a debit, destination gets a credit — both land in
+          today's sheet automatically. NOT counted as income/expense.
+        </p>
+        <form id="xferForm" class="grid">
+          <select id="xfer-from"><option value="">From bank…</option></select>
+          <select id="xfer-to"><option value="">To bank…</option></select>
+          <input id="xfer-amt" type="number" step="0.01" min="0" placeholder="Amount" required/>
+          <input id="xfer-remark" placeholder="Remark (optional)"/>
+          <button class="primary" type="submit">Transfer</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Today's transfers</h2>
+        <div id="xferTable"></div>
+      </div>
     </div>
 
     <div id="tab-uploads" class="tabpanel">

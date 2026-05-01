@@ -338,4 +338,96 @@ router.post('/reconcile-dw/apply', (req, res) => {
   res.json({ ok: true, written, mode });
 });
 
+// ── INTERNAL BANK-TO-BANK TRANSFERS ───────────────────────────
+// When you're short of funds at one bank, you transfer money in from another
+// of YOUR banks (same branch or cross-branch). This is NOT external income/
+// expense — money is just moving inside the system. Each transfer creates
+// two paired bank_txns rows:
+//   • debit on the FROM bank
+//   • credit on the TO  bank
+// Both share an ext_ref like 'xfer:<uuid>:from' / 'xfer:<uuid>:to' so
+// deleting one cleans both up (via the existing tombstone path), and so
+// they don't double-trigger dedupe against external SMS/PDF rows.
+// Category = 'internal_transfer' — this falls OUTSIDE the 'charge' filter,
+// so the credit/debit rolls into each bank's daily Credit Amt / Debit Amt
+// totals on the sheet (exactly what we want: source bank balance goes
+// down, destination goes up — no money created or destroyed).
+router.post('/transfers', (req, res) => {
+  const { from_bank_id, to_bank_id, amt, remark, ts, business_date } = req.body || {};
+  if (!Number(from_bank_id) || !Number(to_bank_id))
+    return res.status(400).json({ ok: false, error: 'from_bank_id and to_bank_id required' });
+  if (Number(from_bank_id) === Number(to_bank_id))
+    return res.status(400).json({ ok: false, error: 'from and to banks must differ' });
+  const amount = Number(amt);
+  if (!Number.isFinite(amount) || amount <= 0)
+    return res.status(400).json({ ok: false, error: 'amt must be a positive number' });
+  const date = resolveDate({ business_date, ts });
+  const fromBank = db.prepare('SELECT id, name, branch_code FROM banks WHERE id = ?').get(Number(from_bank_id));
+  const toBank   = db.prepare('SELECT id, name, branch_code FROM banks WHERE id = ?').get(Number(to_bank_id));
+  if (!fromBank || !toBank)
+    return res.status(404).json({ ok: false, error: 'one of the banks not found' });
+  const xferId = require('crypto').randomBytes(8).toString('hex');
+  const baseLabel = (remark && String(remark).trim()) ? String(remark).trim() : 'Internal Transfer';
+  const fromDetail = `${baseLabel} → ${toBank.name}${toBank.branch_code ? ` [${toBank.branch_code}]` : ''}`;
+  const toDetail   = `${baseLabel} ← ${fromBank.name}${fromBank.branch_code ? ` [${fromBank.branch_code}]` : ''}`;
+  const ins = db.prepare(`INSERT INTO bank_txns(business_date, ts, bank_id, type, amt, detail, category, source, ext_ref, created_by)
+                          VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const tx = db.transaction(() => {
+    ins.run(date, ts || null, fromBank.id, 'debit',  amount, fromDetail, 'internal_transfer', 'transfer', `xfer:${xferId}:from`, req.user.id);
+    ins.run(date, ts || null, toBank.id,   'credit', amount, toDetail,   'internal_transfer', 'transfer', `xfer:${xferId}:to`,   req.user.id);
+  });
+  tx();
+  audit(req.user.id, 'create', 'transfer', null, {
+    from_bank_id: fromBank.id, to_bank_id: toBank.id, amt: amount,
+    cross_branch: fromBank.branch_code !== toBank.branch_code,
+    xfer_id: xferId, business_date: date,
+  });
+  res.json({ ok: true, xfer_id: xferId, business_date: date,
+             from: fromBank.name, to: toBank.name,
+             cross_branch: fromBank.branch_code !== toBank.branch_code });
+});
+
+// List transfers for a date — paired into one row per transfer for the UI.
+router.get('/transfers', (req, res) => {
+  const date = req.query.date || currentBusinessDate();
+  const rows = db.prepare(`
+    SELECT t.id, t.business_date, t.ts, t.bank_id, t.type, t.amt, t.detail, t.ext_ref,
+           b.name AS bank_name, b.branch_code
+    FROM bank_txns t LEFT JOIN banks b ON b.id = t.bank_id
+    WHERE t.business_date = ? AND t.category = 'internal_transfer'
+      AND t.ext_ref LIKE 'xfer:%'
+    ORDER BY t.id DESC
+  `).all(date);
+  const grouped = {};
+  for (const r of rows) {
+    const m = r.ext_ref && r.ext_ref.match(/^xfer:([a-f0-9]+):(from|to)$/);
+    if (!m) continue;
+    const id = m[1];
+    grouped[id] = grouped[id] || { xfer_id: id, business_date: r.business_date, amt: r.amt, ts: r.ts };
+    if (m[2] === 'from') grouped[id].from = { bank_id: r.bank_id, bank_name: r.bank_name, branch_code: r.branch_code, detail: r.detail, leg_id: r.id };
+    else                 grouped[id].to   = { bank_id: r.bank_id, bank_name: r.bank_name, branch_code: r.branch_code, detail: r.detail, leg_id: r.id };
+  }
+  res.json({ ok: true, rows: Object.values(grouped) });
+});
+
+// Delete a transfer by xfer_id — removes BOTH legs and tombstones their
+// ext_refs so any future re-import (e.g. an SMS like "you sent ₹500 to
+// bank A") doesn't resurrect a transfer the operator deliberately removed.
+router.delete('/transfers/:xferId', (req, res) => {
+  const xferId = req.params.xferId;
+  const fromRef = `xfer:${xferId}:from`, toRef = `xfer:${xferId}:to`;
+  const tombstone = db.prepare(`INSERT OR IGNORE INTO deleted_ext_refs(ext_ref, table_name, deleted_at)
+                                VALUES (?, 'bank_txns', datetime('now'))`);
+  const del = db.prepare('DELETE FROM bank_txns WHERE ext_ref = ?');
+  let removed = 0;
+  const tx = db.transaction(() => {
+    tombstone.run(fromRef); tombstone.run(toRef);
+    removed += del.run(fromRef).changes;
+    removed += del.run(toRef).changes;
+  });
+  tx();
+  audit(req.user.id, 'delete', 'transfer', null, { xfer_id: xferId, removed });
+  res.json({ ok: true, removed });
+});
+
 module.exports = router;
